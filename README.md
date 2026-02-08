@@ -61,4 +61,4 @@ Reflex implements a pushdown automaton with append-only tape — equivalent to a
 
 ## License
 
-TBD
+Apache License 2.0 — see [LICENSE](LICENSE)
