@@ -481,3 +481,343 @@ describe('ScopedBlackboard', () => {
     });
   });
 });
+
+// ===========================================================================
+// Blackboard integration tests (M2-3: issue #6)
+// ===========================================================================
+
+describe('Blackboard integration (M2-3)', () => {
+  const src: BlackboardSource = {
+    workflowId: 'wf-int',
+    nodeId: 'node-int',
+    stackDepth: 0,
+  };
+
+  // -----------------------------------------------------------------------
+  // 1. Write and read back single value
+  // -----------------------------------------------------------------------
+
+  describe('write and read back', () => {
+    it('round-trips a single key/value through append → reader.get()', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'color', value: 'blue' }], src);
+      const reader = bb.reader();
+      expect(reader.get('color')).toBe('blue');
+    });
+
+    it('round-trips multiple keys written in one append call', () => {
+      const bb = new ScopedBlackboard();
+      bb.append(
+        [
+          { key: 'color', value: 'red' },
+          { key: 'size', value: 'large' },
+          { key: 'count', value: 42 },
+        ],
+        src,
+      );
+      const reader = bb.reader();
+      expect(reader.get('color')).toBe('red');
+      expect(reader.get('size')).toBe('large');
+      expect(reader.get('count')).toBe(42);
+    });
+
+    it('round-trips values written across multiple append calls', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'a', value: 1 }], src);
+      bb.append([{ key: 'b', value: 2 }], src);
+      const reader = bb.reader();
+      expect(reader.get('a')).toBe(1);
+      expect(reader.get('b')).toBe(2);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 2. Same-key shadowing within a scope
+  // -----------------------------------------------------------------------
+
+  describe('same-key shadowing within a scope', () => {
+    it('reader.get() returns the latest value after two writes to same key', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'color', value: 'blue' }], src);
+      bb.append([{ key: 'color', value: 'red' }], src);
+      const reader = bb.reader();
+      expect(reader.get('color')).toBe('red');
+    });
+
+    it('reader.getAll() returns both entries in chronological order', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'color', value: 'blue' }], src);
+      bb.append([{ key: 'color', value: 'red' }], src);
+      const reader = bb.reader();
+      const all = reader.getAll('color');
+      expect(all).toHaveLength(2);
+      expect(all[0].value).toBe('blue');
+      expect(all[1].value).toBe('red');
+    });
+
+    it('reader.has() returns true for a shadowed key', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'x', value: 1 }], src);
+      bb.append([{ key: 'x', value: 2 }], src);
+      expect(bb.reader().has('x')).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 3. Cross-scope read precedence (local shadows parent)
+  // -----------------------------------------------------------------------
+
+  describe('cross-scope read precedence', () => {
+    it('child scope shadows parent scope for same key', () => {
+      const parent = new ScopedBlackboard();
+      parent.append([{ key: 'color', value: 'parent-blue' }], {
+        ...src,
+        stackDepth: 0,
+      });
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'color', value: 'child-red' }], {
+        ...src,
+        stackDepth: 1,
+      });
+
+      const reader = child.reader([parent.getEntries() as BlackboardEntry[]]);
+      expect(reader.get('color')).toBe('child-red');
+    });
+
+    it('child reader falls back to parent for keys not in child', () => {
+      const parent = new ScopedBlackboard();
+      parent.append([{ key: 'origin', value: 'from-parent' }], src);
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'local-only', value: 'yes' }], src);
+
+      const reader = child.reader([parent.getEntries() as BlackboardEntry[]]);
+      expect(reader.get('origin')).toBe('from-parent');
+      expect(reader.get('local-only')).toBe('yes');
+    });
+
+    it('three-deep scope chain: grandparent → parent → child', () => {
+      const grandparent = new ScopedBlackboard();
+      grandparent.append([{ key: 'deep', value: 'gp-value' }], {
+        ...src,
+        stackDepth: 0,
+      });
+
+      const parent = new ScopedBlackboard();
+      parent.append([{ key: 'mid', value: 'parent-value' }], {
+        ...src,
+        stackDepth: 1,
+      });
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'top', value: 'child-value' }], {
+        ...src,
+        stackDepth: 2,
+      });
+
+      const reader = child.reader([
+        parent.getEntries() as BlackboardEntry[],
+        grandparent.getEntries() as BlackboardEntry[],
+      ]);
+
+      expect(reader.get('top')).toBe('child-value');
+      expect(reader.get('mid')).toBe('parent-value');
+      expect(reader.get('deep')).toBe('gp-value');
+    });
+
+    it('child shadows grandparent even when parent has no entry for that key', () => {
+      const grandparent = new ScopedBlackboard();
+      grandparent.append([{ key: 'color', value: 'gp-green' }], src);
+
+      const parent = new ScopedBlackboard();
+      // parent does NOT write 'color'
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'color', value: 'child-red' }], src);
+
+      const reader = child.reader([
+        parent.getEntries() as BlackboardEntry[],
+        grandparent.getEntries() as BlackboardEntry[],
+      ]);
+      expect(reader.get('color')).toBe('child-red');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 4. getAll() returns shadowed entries in correct order
+  // -----------------------------------------------------------------------
+
+  describe('getAll() cross-scope ordering', () => {
+    it('returns entries from child first, then parent, then grandparent', () => {
+      const grandparent = new ScopedBlackboard();
+      grandparent.append([{ key: 'x', value: 'gp' }], src);
+
+      const parent = new ScopedBlackboard();
+      parent.append([{ key: 'x', value: 'parent' }], src);
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'x', value: 'child' }], src);
+
+      const reader = child.reader([
+        parent.getEntries() as BlackboardEntry[],
+        grandparent.getEntries() as BlackboardEntry[],
+      ]);
+
+      const all = reader.getAll('x');
+      expect(all).toHaveLength(3);
+      expect(all[0].value).toBe('child');
+      expect(all[1].value).toBe('parent');
+      expect(all[2].value).toBe('gp');
+    });
+
+    it('preserves chronological order within each scope', () => {
+      const parent = new ScopedBlackboard();
+      parent.append([{ key: 'x', value: 'p1' }], src);
+      parent.append([{ key: 'x', value: 'p2' }], src);
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'x', value: 'c1' }], src);
+      child.append([{ key: 'x', value: 'c2' }], src);
+
+      const reader = child.reader([parent.getEntries() as BlackboardEntry[]]);
+      const all = reader.getAll('x');
+      expect(all).toHaveLength(4);
+      expect(all.map((e) => e.value)).toEqual(['c1', 'c2', 'p1', 'p2']);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 5. local() returns only innermost scope
+  // -----------------------------------------------------------------------
+
+  describe('local() returns only innermost scope', () => {
+    it('returns only child entries when parent scope exists', () => {
+      const parent = new ScopedBlackboard();
+      parent.append([{ key: 'origin', value: 'parent' }], src);
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'local-key', value: 'child' }], src);
+
+      const reader = child.reader([parent.getEntries() as BlackboardEntry[]]);
+      const loc = reader.local();
+      expect(loc).toHaveLength(1);
+      expect(loc[0].key).toBe('local-key');
+      expect(loc[0].value).toBe('child');
+    });
+
+    it('parent entries are not included in local()', () => {
+      const parent = new ScopedBlackboard();
+      parent.append(
+        [
+          { key: 'a', value: 1 },
+          { key: 'b', value: 2 },
+        ],
+        src,
+      );
+
+      const child = new ScopedBlackboard();
+      child.append([{ key: 'c', value: 3 }], src);
+
+      const reader = child.reader([parent.getEntries() as BlackboardEntry[]]);
+      const loc = reader.local();
+      expect(loc).toHaveLength(1);
+      expect(loc.every((e) => e.key === 'c')).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 6. Append-only invariant: no mutation, no deletion
+  // -----------------------------------------------------------------------
+
+  describe('append-only invariant', () => {
+    it('all previous entries remain present after additional appends', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'a', value: 1 }], src);
+      bb.append([{ key: 'b', value: 2 }], src);
+      bb.append([{ key: 'c', value: 3 }], src);
+
+      const entries = bb.getEntries();
+      expect(entries).toHaveLength(3);
+      expect(entries[0].key).toBe('a');
+      expect(entries[1].key).toBe('b');
+      expect(entries[2].key).toBe('c');
+    });
+
+    it('values and timestamps of existing entries are preserved after new appends', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'first', value: 'original' }], src);
+      const snapshot = bb.getEntries()[0];
+
+      bb.append([{ key: 'second', value: 'new' }], src);
+      bb.append([{ key: 'third', value: 'newer' }], src);
+
+      const entries = bb.getEntries();
+      expect(entries[0].key).toBe(snapshot.key);
+      expect(entries[0].value).toBe(snapshot.value);
+      expect(entries[0].timestamp).toBe(snapshot.timestamp);
+      expect(entries[0].source).toEqual(snapshot.source);
+    });
+
+    it('getEntries() length only grows, never shrinks', () => {
+      const bb = new ScopedBlackboard();
+      expect(bb.getEntries()).toHaveLength(0);
+
+      bb.append([{ key: 'a', value: 1 }], src);
+      expect(bb.getEntries()).toHaveLength(1);
+
+      bb.append([{ key: 'b', value: 2 }], src);
+      expect(bb.getEntries()).toHaveLength(2);
+
+      bb.append([{ key: 'a', value: 99 }], src); // shadow, not replace
+      expect(bb.getEntries()).toHaveLength(3);
+    });
+
+    it('shadowing a key does not remove the original entry', () => {
+      const bb = new ScopedBlackboard();
+      bb.append([{ key: 'color', value: 'blue' }], src);
+      bb.append([{ key: 'color', value: 'red' }], src);
+
+      const reader = bb.reader();
+      expect(reader.get('color')).toBe('red'); // latest wins
+      expect(reader.getAll('color')).toHaveLength(2); // both still present
+      expect(reader.getAll('color')[0].value).toBe('blue'); // original preserved
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 7. Empty blackboard returns undefined / false / empty arrays
+  // -----------------------------------------------------------------------
+
+  describe('empty blackboard', () => {
+    it('reader.get() returns undefined', () => {
+      const bb = new ScopedBlackboard();
+      expect(bb.reader().get('anything')).toBeUndefined();
+    });
+
+    it('reader.has() returns false', () => {
+      const bb = new ScopedBlackboard();
+      expect(bb.reader().has('anything')).toBe(false);
+    });
+
+    it('reader.getAll() returns empty array', () => {
+      const bb = new ScopedBlackboard();
+      expect(bb.reader().getAll('anything')).toEqual([]);
+    });
+
+    it('reader.entries() returns empty array', () => {
+      const bb = new ScopedBlackboard();
+      expect(bb.reader().entries()).toEqual([]);
+    });
+
+    it('reader.keys() returns empty array', () => {
+      const bb = new ScopedBlackboard();
+      expect(bb.reader().keys()).toEqual([]);
+    });
+
+    it('reader.local() returns empty array', () => {
+      const bb = new ScopedBlackboard();
+      expect(bb.reader().local()).toEqual([]);
+    });
+  });
+});
