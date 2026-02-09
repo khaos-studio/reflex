@@ -1,7 +1,12 @@
-// Reflex — Scoped Blackboard Reader
-// Implements DESIGN.md Section 2.11
+// Reflex — Scoped Blackboard
+// Implements DESIGN.md Sections 2.7 and 2.11
 
-import { BlackboardEntry, BlackboardReader } from './types';
+import {
+  BlackboardEntry,
+  BlackboardReader,
+  BlackboardSource,
+  BlackboardWrite,
+} from './types';
 
 // ---------------------------------------------------------------------------
 // Scoped Blackboard Reader
@@ -101,5 +106,63 @@ export class ScopedBlackboardReader implements BlackboardReader {
   local(): BlackboardEntry[] {
     if (this.scopes.length === 0) return [];
     return [...this.scopes[0]];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scoped Blackboard (write side)
+// ---------------------------------------------------------------------------
+
+/**
+ * Append-only blackboard for a single scope (one workflow on the stack).
+ *
+ * Owns a mutable `BlackboardEntry[]` that grows via `append()`. No entries
+ * are ever deleted or mutated — the only mutation path is appending new ones.
+ *
+ * Use `reader()` to construct a `ScopedBlackboardReader` that includes this
+ * scope's entries plus any ancestor scopes from the call stack.
+ */
+export class ScopedBlackboard {
+  private readonly entries: BlackboardEntry[] = [];
+
+  constructor(entries?: BlackboardEntry[]) {
+    if (entries) {
+      this.entries.push(...entries);
+    }
+  }
+
+  /**
+   * Convert writes to full entries and append them to this scope.
+   *
+   * All entries in a single call share the same source and timestamp
+   * (they originate from one decision).
+   *
+   * Returns the newly created entries (useful for event emission).
+   */
+  append(writes: BlackboardWrite[], source: BlackboardSource): BlackboardEntry[] {
+    const timestamp = Date.now();
+    const newEntries: BlackboardEntry[] = writes.map((w) => ({
+      key: w.key,
+      value: w.value,
+      source,
+      timestamp,
+    }));
+    this.entries.push(...newEntries);
+    return newEntries;
+  }
+
+  /**
+   * Read-only snapshot of this scope's entries.
+   */
+  getEntries(): readonly BlackboardEntry[] {
+    return [...this.entries];
+  }
+
+  /**
+   * Construct a `ScopedBlackboardReader` with this scope as the local
+   * (innermost) scope, plus any ancestor scopes from the call stack.
+   */
+  reader(parentScopes: BlackboardEntry[][] = []): ScopedBlackboardReader {
+    return new ScopedBlackboardReader([this.entries, ...parentScopes]);
   }
 }
