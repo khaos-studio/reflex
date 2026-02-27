@@ -171,3 +171,16 @@ export type EngineEvent =
   | 'engine:complete'
   | 'engine:suspend'
   | 'engine:error';
+
+// ---------------------------------------------------------------------------
+// 3.2 Execution Engine — EngineStatus, RunResult, EventHandler
+// ---------------------------------------------------------------------------
+
+export type EngineStatus = 'idle' | 'running' | 'suspended' | 'completed' | 'error';
+
+export type RunResult =
+  | { status: 'completed' }
+  | { status: 'suspended'; reason: string }
+  | { status: 'error'; error: unknown };
+
+export type EventHandler = (payload?: unknown) => void;
