@@ -1,0 +1,753 @@
+package reflex
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+// ---------------------------------------------------------------------------
+// Test helpers
+// ---------------------------------------------------------------------------
+
+// agentFunc wraps a function as a DecisionAgent.
+type agentFunc func(ctx context.Context, dc DecisionContext) (Decision, error)
+
+func (f agentFunc) Resolve(ctx context.Context, dc DecisionContext) (Decision, error) {
+	return f(ctx, dc)
+}
+
+// autoAdvanceAgent always picks the first valid edge.
+func autoAdvanceAgent() DecisionAgent {
+	return agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		if len(dc.ValidEdges) == 0 {
+			return Decision{Type: DecisionComplete}, nil
+		}
+		return Decision{Type: DecisionAdvance, Edge: dc.ValidEdges[0].ID}, nil
+	})
+}
+
+// setupLinear creates a registry with a linear A→B→C workflow and returns engine + registry.
+func setupLinear() (*Engine, *Registry) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("linear"))
+	e := NewEngine(r, autoAdvanceAgent())
+	return e, r
+}
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+
+func TestEngineInit(t *testing.T) {
+	e, _ := setupLinear()
+
+	t.Run("returns session ID", func(t *testing.T) {
+		sid, err := e.Init("linear")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sid == "" {
+			t.Error("expected non-empty session ID")
+		}
+	})
+	t.Run("status is running after init", func(t *testing.T) {
+		_, _ = e.Init("linear")
+		if e.Status() != StatusRunning {
+			t.Errorf("expected running, got %s", e.Status())
+		}
+	})
+	t.Run("current node is entry", func(t *testing.T) {
+		_, _ = e.Init("linear")
+		n := e.CurrentNode()
+		if n == nil || n.ID != "A" {
+			t.Error("expected current node A")
+		}
+	})
+	t.Run("error for unregistered workflow", func(t *testing.T) {
+		_, err := e.Init("nonexistent")
+		if err == nil {
+			t.Error("expected error")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Step — linear workflow
+// ---------------------------------------------------------------------------
+
+func TestEngineStepLinear(t *testing.T) {
+	e, _ := setupLinear()
+	_, _ = e.Init("linear")
+
+	// Step 1: A → B
+	r1, err := e.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.Status != StepAdvanced || r1.Node.ID != "B" {
+		t.Errorf("expected advanced to B, got %s %v", r1.Status, r1.Node)
+	}
+
+	// Step 2: B → C
+	r2, err := e.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Status != StepAdvanced || r2.Node.ID != "C" {
+		t.Errorf("expected advanced to C, got %s", r2.Status)
+	}
+
+	// Step 3: C is terminal → complete
+	r3, err := e.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r3.Status != StepCompleted {
+		t.Errorf("expected completed, got %s", r3.Status)
+	}
+	if e.Status() != StatusCompleted {
+		t.Errorf("expected engine completed, got %s", e.Status())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step — branching via guards
+// ---------------------------------------------------------------------------
+
+func TestEngineStepBranching(t *testing.T) {
+	r := NewRegistry()
+	// INIT → START (writes dir) → LEFT or RIGHT (guarded)
+	_ = r.Register(&Workflow{
+		ID:    "branch",
+		Entry: "INIT",
+		Nodes: map[string]*Node{
+			"INIT":  {ID: "INIT", Spec: NodeSpec{}},
+			"START": {ID: "START", Spec: NodeSpec{}},
+			"LEFT":  {ID: "LEFT", Spec: NodeSpec{}},
+			"RIGHT": {ID: "RIGHT", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{
+			{ID: "e-init", From: "INIT", To: "START", Event: "NEXT"},
+			{ID: "e-left", From: "START", To: "LEFT", Event: "GO", Guard: &BuiltinGuard{Type: GuardEquals, Key: "dir", Value: "left"}},
+			{ID: "e-right", From: "START", To: "RIGHT", Event: "GO", Guard: &BuiltinGuard{Type: GuardEquals, Key: "dir", Value: "right"}},
+		},
+	})
+
+	// INIT writes dir=right to blackboard, then START sees guarded edges
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		switch dc.Node.ID {
+		case "INIT":
+			return Decision{
+				Type:   DecisionAdvance,
+				Edge:   "e-init",
+				Writes: []BlackboardWrite{{Key: "dir", Value: "right"}},
+			}, nil
+		case "START":
+			// Guards have already filtered — only e-right should be valid
+			for _, e := range dc.ValidEdges {
+				if e.ID == "e-right" {
+					return Decision{Type: DecisionAdvance, Edge: "e-right"}, nil
+				}
+			}
+			return Decision{}, errors.New("e-right not in valid edges")
+		default:
+			return Decision{Type: DecisionComplete}, nil
+		}
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("branch")
+
+	// Step 1: INIT → START (writes dir=right)
+	r1, _ := e.Step(context.Background())
+	if r1.Node.ID != "START" {
+		t.Fatalf("expected START, got %s", r1.Node.ID)
+	}
+
+	// Step 2: START → RIGHT (guard passes)
+	r2, err := e.Step(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Node.ID != "RIGHT" {
+		t.Errorf("expected RIGHT, got %s", r2.Node.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step — sub-workflow invocation and pop
+// ---------------------------------------------------------------------------
+
+func TestEngineSubWorkflow(t *testing.T) {
+	r := NewRegistry()
+
+	// Child: CHILD_A → CHILD_END
+	_ = r.Register(&Workflow{
+		ID:    "child",
+		Entry: "CHILD_A",
+		Nodes: map[string]*Node{
+			"CHILD_A":   {ID: "CHILD_A", Spec: NodeSpec{}},
+			"CHILD_END": {ID: "CHILD_END", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{{ID: "ec1", From: "CHILD_A", To: "CHILD_END", Event: "NEXT"}},
+	})
+
+	// Parent: SETUP → INVOKE → END
+	_ = r.Register(&Workflow{
+		ID:    "parent",
+		Entry: "SETUP",
+		Nodes: map[string]*Node{
+			"SETUP": {ID: "SETUP", Spec: NodeSpec{}},
+			"INVOKE": {ID: "INVOKE", Spec: NodeSpec{}, Invokes: &InvocationSpec{
+				WorkflowID: "child",
+				ReturnMap:  []ReturnMapping{{ParentKey: "result", ChildKey: "output"}},
+			}},
+			"END": {ID: "END", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{
+			{ID: "ep1", From: "SETUP", To: "INVOKE", Event: "NEXT"},
+			{ID: "ep2", From: "INVOKE", To: "END", Event: "NEXT"},
+		},
+	})
+
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		if len(dc.ValidEdges) == 0 {
+			writes := []BlackboardWrite{}
+			if dc.Node.ID == "CHILD_END" {
+				writes = append(writes, BlackboardWrite{Key: "output", Value: "child_result"})
+			}
+			return Decision{Type: DecisionComplete, Writes: writes}, nil
+		}
+		return Decision{Type: DecisionAdvance, Edge: dc.ValidEdges[0].ID}, nil
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("parent")
+
+	// Step 1: SETUP → INVOKE
+	r1, _ := e.Step(context.Background())
+	if r1.Status != StepAdvanced || r1.Node.ID != "INVOKE" {
+		t.Fatalf("expected advanced to INVOKE, got %s %v", r1.Status, r1.Node)
+	}
+
+	// Step 2: INVOKE triggers invocation → child starts at CHILD_A
+	r2, _ := e.Step(context.Background())
+	if r2.Status != StepInvoked || r2.Node.ID != "CHILD_A" {
+		t.Fatalf("expected invoked at CHILD_A, got %s", r2.Status)
+	}
+	if len(e.Stack()) != 1 {
+		t.Fatalf("expected stack depth 1, got %d", len(e.Stack()))
+	}
+
+	// Step 3: CHILD_A → CHILD_END
+	r3, _ := e.Step(context.Background())
+	if r3.Status != StepAdvanced || r3.Node.ID != "CHILD_END" {
+		t.Fatalf("expected advanced to CHILD_END, got %s", r3.Status)
+	}
+
+	// Step 4: CHILD_END completes → pop back to parent INVOKE
+	r4, _ := e.Step(context.Background())
+	if r4.Status != StepPopped || r4.Node.ID != "INVOKE" {
+		t.Fatalf("expected popped to INVOKE, got %s %v", r4.Status, r4.Node)
+	}
+
+	// Verify returnMap copied "output" → "result"
+	v, ok := e.Blackboard().Get("result")
+	if !ok || v != "child_result" {
+		t.Errorf("expected result=child_result, got %v (ok=%v)", v, ok)
+	}
+
+	// Step 5: INVOKE → END (skip re-invocation)
+	r5, _ := e.Step(context.Background())
+	if r5.Status != StepAdvanced || r5.Node.ID != "END" {
+		t.Fatalf("expected advanced to END, got %s", r5.Status)
+	}
+
+	// Step 6: END completes
+	r6, _ := e.Step(context.Background())
+	if r6.Status != StepCompleted {
+		t.Fatalf("expected completed, got %s", r6.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step — suspension and resumption
+// ---------------------------------------------------------------------------
+
+func TestEngineSuspension(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("wf"))
+
+	callCount := 0
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		callCount++
+		if dc.Node.ID == "A" && callCount == 1 {
+			return Decision{Type: DecisionSuspend, Reason: "awaiting input"}, nil
+		}
+		if len(dc.ValidEdges) == 0 {
+			return Decision{Type: DecisionComplete}, nil
+		}
+		return Decision{Type: DecisionAdvance, Edge: dc.ValidEdges[0].ID}, nil
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("wf")
+
+	// Step 1: suspend at A
+	res, _ := e.Step(context.Background())
+	if res.Status != StepSuspended || res.Reason != "awaiting input" {
+		t.Fatalf("expected suspended, got %s", res.Status)
+	}
+	if e.Status() != StatusSuspended {
+		t.Error("expected engine suspended")
+	}
+
+	// Step 2: resume → advance to B
+	res2, _ := e.Step(context.Background())
+	if res2.Status != StepAdvanced || res2.Node.ID != "B" {
+		t.Fatalf("expected advanced to B after resume, got %s", res2.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step — complete at non-terminal
+// ---------------------------------------------------------------------------
+
+func TestEngineCompleteAtNonTerminal(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("wf"))
+
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		return Decision{Type: DecisionComplete}, nil // A has outgoing edges
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("wf")
+
+	res, _ := e.Step(context.Background())
+	if res.Status != StepSuspended {
+		t.Fatalf("expected suspended (error), got %s", res.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step — invalid edge selection
+// ---------------------------------------------------------------------------
+
+func TestEngineInvalidEdge(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("wf"))
+
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		return Decision{Type: DecisionAdvance, Edge: "nonexistent"}, nil
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("wf")
+
+	res, _ := e.Step(context.Background())
+	if res.Status != StepSuspended {
+		t.Fatalf("expected suspended (error), got %s", res.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step — missing sub-workflow at runtime
+// ---------------------------------------------------------------------------
+
+func TestEngineMissingSubWorkflow(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(&Workflow{
+		ID:    "parent",
+		Entry: "A",
+		Nodes: map[string]*Node{
+			"A": {ID: "A", Spec: NodeSpec{}, Invokes: &InvocationSpec{WorkflowID: "missing"}},
+			"B": {ID: "B", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{{ID: "e1", From: "A", To: "B", Event: "NEXT"}},
+	})
+
+	e := NewEngine(r, autoAdvanceAgent())
+	_, _ = e.Init("parent")
+
+	res, _ := e.Step(context.Background())
+	if res.Status != StepSuspended {
+		t.Fatalf("expected suspended (missing sub-workflow), got %s", res.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step — agent error
+// ---------------------------------------------------------------------------
+
+func TestEngineAgentError(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("wf"))
+
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		return Decision{}, errors.New("agent broke")
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("wf")
+
+	res, _ := e.Step(context.Background())
+	if res.Status != StepSuspended {
+		t.Fatalf("expected suspended, got %s", res.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Run — completes linear workflow
+// ---------------------------------------------------------------------------
+
+func TestEngineRunComplete(t *testing.T) {
+	e, _ := setupLinear()
+	_, _ = e.Init("linear")
+
+	res, err := e.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StepCompleted {
+		t.Errorf("expected completed, got %s", res.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Run — suspends
+// ---------------------------------------------------------------------------
+
+func TestEngineRunSuspends(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("wf"))
+
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		return Decision{Type: DecisionSuspend, Reason: "wait"}, nil
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("wf")
+
+	res, err := e.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StepSuspended {
+		t.Errorf("expected suspended, got %s", res.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Run — context cancellation
+// ---------------------------------------------------------------------------
+
+func TestEngineRunContextCancel(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("wf"))
+
+	// Agent that never completes
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		return Decision{Type: DecisionAdvance, Edge: dc.ValidEdges[0].ID}, nil
+	})
+
+	// Create a workflow that loops by having the agent never reach a terminal
+	// Actually, the linear workflow will complete. Let's just cancel immediately.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before Run
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("wf")
+
+	_, err := e.Run(ctx)
+	if err == nil {
+		t.Error("expected context cancellation error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Event emission
+// ---------------------------------------------------------------------------
+
+func TestEngineEvents(t *testing.T) {
+	e, _ := setupLinear()
+
+	var events []EventType
+	for _, et := range []EventType{
+		EventNodeEnter, EventNodeExit, EventEdgeTraverse,
+		EventEngineComplete, EventWorkflowPush, EventWorkflowPop,
+		EventBlackboardWrite,
+	} {
+		et := et
+		e.On(et, func(ev Event) { events = append(events, et) })
+	}
+
+	_, _ = e.Init("linear")
+	_, _ = e.Run(context.Background())
+
+	// For A→B→C (linear, 2 edges), expect:
+	// node:exit, edge:traverse, node:enter (A→B)
+	// node:exit, edge:traverse, node:enter (B→C)
+	// engine:complete
+	expectedTypes := []EventType{
+		EventNodeExit, EventEdgeTraverse, EventNodeEnter,
+		EventNodeExit, EventEdgeTraverse, EventNodeEnter,
+		EventEngineComplete,
+	}
+	if len(events) != len(expectedTypes) {
+		t.Fatalf("expected %d events, got %d: %v", len(expectedTypes), len(events), events)
+	}
+	for i, et := range expectedTypes {
+		if events[i] != et {
+			t.Errorf("event[%d]: expected %s, got %s", i, et, events[i])
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Blackboard scoping — child reads parent, parent can't read child after pop
+// ---------------------------------------------------------------------------
+
+func TestEngineBlackboardScoping(t *testing.T) {
+	r := NewRegistry()
+
+	_ = r.Register(&Workflow{
+		ID:    "child",
+		Entry: "C1",
+		Nodes: map[string]*Node{
+			"C1":   {ID: "C1", Spec: NodeSpec{}},
+			"CEND": {ID: "CEND", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{{ID: "ec1", From: "C1", To: "CEND", Event: "NEXT"}},
+	})
+
+	_ = r.Register(&Workflow{
+		ID:    "parent",
+		Entry: "P1",
+		Nodes: map[string]*Node{
+			"P1": {ID: "P1", Spec: NodeSpec{}},
+			"P2": {ID: "P2", Spec: NodeSpec{}, Invokes: &InvocationSpec{WorkflowID: "child"}},
+			"P3": {ID: "P3", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{
+			{ID: "ep1", From: "P1", To: "P2", Event: "NEXT"},
+			{ID: "ep2", From: "P2", To: "P3", Event: "NEXT"},
+		},
+	})
+
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		switch dc.Node.ID {
+		case "P1":
+			return Decision{
+				Type: DecisionAdvance, Edge: "ep1",
+				Writes: []BlackboardWrite{{Key: "parent_key", Value: "parent_val"}},
+			}, nil
+		case "C1":
+			// Child should be able to read parent's blackboard
+			if v, ok := dc.Blackboard.Get("parent_key"); !ok || v != "parent_val" {
+				return Decision{}, errors.New("child cannot read parent blackboard")
+			}
+			return Decision{
+				Type: DecisionAdvance, Edge: "ec1",
+				Writes: []BlackboardWrite{{Key: "child_key", Value: "child_val"}},
+			}, nil
+		case "CEND":
+			return Decision{Type: DecisionComplete}, nil
+		case "P2": // after pop
+			return Decision{Type: DecisionAdvance, Edge: "ep2"}, nil
+		case "P3":
+			return Decision{Type: DecisionComplete}, nil
+		}
+		return Decision{}, errors.New("unexpected node")
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("parent")
+
+	res, err := e.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StepCompleted {
+		t.Fatalf("expected completed, got %s reason=%s", res.Status, res.Reason)
+	}
+
+	// After completion, child's blackboard is gone
+	_, ok := e.Blackboard().Get("child_key")
+	if ok {
+		t.Error("child_key should not be visible after pop (no returnMap)")
+	}
+
+	// Parent key should still be there
+	v, ok := e.Blackboard().Get("parent_key")
+	if !ok || v != "parent_val" {
+		t.Error("parent_key should still be visible")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step called before init
+// ---------------------------------------------------------------------------
+
+func TestEngineStepBeforeInit(t *testing.T) {
+	r := NewRegistry()
+	e := NewEngine(r, autoAdvanceAgent())
+	_, err := e.Step(context.Background())
+	if err == nil {
+		t.Error("expected error when stepping before init")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step called after completion
+// ---------------------------------------------------------------------------
+
+func TestEngineStepAfterComplete(t *testing.T) {
+	e, _ := setupLinear()
+	_, _ = e.Init("linear")
+	_, _ = e.Run(context.Background())
+
+	_, err := e.Step(context.Background())
+	if err == nil {
+		t.Error("expected error when stepping after completion")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Blackboard writes with advance
+// ---------------------------------------------------------------------------
+
+func TestEngineBlackboardWrites(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(linearWorkflow("wf"))
+
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		if len(dc.ValidEdges) == 0 {
+			return Decision{Type: DecisionComplete}, nil
+		}
+		return Decision{
+			Type:   DecisionAdvance,
+			Edge:   dc.ValidEdges[0].ID,
+			Writes: []BlackboardWrite{{Key: "step", Value: dc.Node.ID}},
+		}, nil
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("wf")
+	_, _ = e.Run(context.Background())
+
+	// Should have "step" written at A and B (not C — that's complete)
+	all := e.Blackboard().GetAll("step")
+	if len(all) != 2 {
+		t.Errorf("expected 2 writes, got %d", len(all))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Nested sub-workflows (2 levels deep)
+// ---------------------------------------------------------------------------
+
+func TestEngineNestedSubWorkflows(t *testing.T) {
+	r := NewRegistry()
+
+	// grandchild: GC1 → GC_END
+	_ = r.Register(&Workflow{
+		ID: "grandchild", Entry: "GC1",
+		Nodes: map[string]*Node{
+			"GC1":    {ID: "GC1", Spec: NodeSpec{}},
+			"GC_END": {ID: "GC_END", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{{ID: "egc1", From: "GC1", To: "GC_END", Event: "NEXT"}},
+	})
+
+	// child: C1 → C_INVOKE → C_END
+	_ = r.Register(&Workflow{
+		ID: "child", Entry: "C1",
+		Nodes: map[string]*Node{
+			"C1":       {ID: "C1", Spec: NodeSpec{}},
+			"C_INVOKE": {ID: "C_INVOKE", Spec: NodeSpec{}, Invokes: &InvocationSpec{WorkflowID: "grandchild"}},
+			"C_END":    {ID: "C_END", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{
+			{ID: "ec1", From: "C1", To: "C_INVOKE", Event: "NEXT"},
+			{ID: "ec2", From: "C_INVOKE", To: "C_END", Event: "NEXT"},
+		},
+	})
+
+	// parent: P1 → P_INVOKE → P_END
+	_ = r.Register(&Workflow{
+		ID: "parent", Entry: "P1",
+		Nodes: map[string]*Node{
+			"P1":       {ID: "P1", Spec: NodeSpec{}},
+			"P_INVOKE": {ID: "P_INVOKE", Spec: NodeSpec{}, Invokes: &InvocationSpec{WorkflowID: "child"}},
+			"P_END":    {ID: "P_END", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{
+			{ID: "ep1", From: "P1", To: "P_INVOKE", Event: "NEXT"},
+			{ID: "ep2", From: "P_INVOKE", To: "P_END", Event: "NEXT"},
+		},
+	})
+
+	e := NewEngine(r, autoAdvanceAgent())
+	_, _ = e.Init("parent")
+
+	res, err := e.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != StepCompleted {
+		t.Errorf("expected completed, got %s", res.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Full pipeline test — 5 node linear workflow
+// ---------------------------------------------------------------------------
+
+func TestEngineFullPipeline(t *testing.T) {
+	r := NewRegistry()
+	_ = r.Register(&Workflow{
+		ID:    "pipeline",
+		Entry: "VALIDATE",
+		Nodes: map[string]*Node{
+			"VALIDATE": {ID: "VALIDATE", Spec: NodeSpec{}},
+			"INGEST":   {ID: "INGEST", Spec: NodeSpec{}},
+			"SCENES":   {ID: "SCENES", Spec: NodeSpec{}},
+			"CHARS":    {ID: "CHARS", Spec: NodeSpec{}},
+			"DONE":     {ID: "DONE", Spec: NodeSpec{}},
+		},
+		Edges: []Edge{
+			{ID: "e1", From: "VALIDATE", To: "INGEST", Event: "NEXT"},
+			{ID: "e2", From: "INGEST", To: "SCENES", Event: "NEXT"},
+			{ID: "e3", From: "SCENES", To: "CHARS", Event: "NEXT"},
+			{ID: "e4", From: "CHARS", To: "DONE", Event: "NEXT"},
+		},
+	})
+
+	visited := []string{}
+	agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+		visited = append(visited, dc.Node.ID)
+		if len(dc.ValidEdges) == 0 {
+			return Decision{Type: DecisionComplete}, nil
+		}
+		return Decision{Type: DecisionAdvance, Edge: dc.ValidEdges[0].ID}, nil
+	})
+
+	e := NewEngine(r, agent)
+	_, _ = e.Init("pipeline")
+	res, _ := e.Run(context.Background())
+
+	if res.Status != StepCompleted {
+		t.Fatalf("expected completed, got %s", res.Status)
+	}
+	expected := []string{"VALIDATE", "INGEST", "SCENES", "CHARS", "DONE"}
+	if len(visited) != len(expected) {
+		t.Fatalf("expected %d nodes visited, got %d: %v", len(expected), len(visited), visited)
+	}
+	for i, id := range expected {
+		if visited[i] != id {
+			t.Errorf("visited[%d]: expected %s, got %s", i, id, visited[i])
+		}
+	}
+}
