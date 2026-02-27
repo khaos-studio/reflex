@@ -3,7 +3,7 @@
 // M4-1: Constructor, init(), state inspection.
 // M4-2: step() — single-workflow stepping with event emission.
 // M4-3: Stack operations — invocation and pop.
-// run() stubbed — implemented in M4-4.
+// M4-4: run() — step until done or suspended.
 
 import {
   Workflow,
@@ -308,7 +308,56 @@ export class ReflexEngine {
   }
 
   async run(): Promise<RunResult> {
-    throw new EngineError('run() not implemented — see M4-4');
+    // -- Precondition guards ------------------------------------------------
+    if (this._status !== 'running' && this._status !== 'suspended') {
+      throw new EngineError(
+        `run() called in invalid state: '${this._status}' — engine must be 'running' or 'suspended'`,
+      );
+    }
+    if (
+      this._currentWorkflowId === null ||
+      this._currentNodeId === null ||
+      this._currentBlackboard === null
+    ) {
+      throw new EngineError('run() called before init()');
+    }
+
+    // -- Track whether the most-recent suspension originated from an error.
+    // step() emits engine:error synchronously before returning, so this flag
+    // is set before the await resolves.
+    let lastErrorPayload: unknown = undefined;
+    let errorFiredThisStep = false;
+
+    this.on('engine:error', (payload) => {
+      errorFiredThisStep = true;
+      lastErrorPayload = payload;
+    });
+
+    // -- Step loop -----------------------------------------------------------
+    while (true) {
+      errorFiredThisStep = false;
+      lastErrorPayload = undefined;
+
+      let result: StepResult;
+      try {
+        result = await this.step();
+      } catch (error) {
+        return { status: 'error', error };
+      }
+
+      if (result.status === 'completed') {
+        return { status: 'completed' };
+      }
+
+      if (result.status === 'suspended') {
+        if (errorFiredThisStep) {
+          return { status: 'error', error: lastErrorPayload };
+        }
+        return { status: 'suspended', reason: result.reason };
+      }
+
+      // 'advanced', 'invoked', 'popped' — continue looping
+    }
   }
 
   // -------------------------------------------------------------------------
