@@ -1,10 +1,10 @@
 # Reflex Roadmap — V1.0
 
 > **Last Updated**: 2026-02-27
-> **Target**: Production-ready release — stable API, declarative workflows, persistence, parallel execution
+> **Target**: Production-ready release — stable API, declarative workflows, node contracts, persistence
 > **Predecessor**: [ROADMAP-v-alpha.md](ROADMAP-v-alpha.md) (M1–M6, 24 issues — completed)
 
-Each milestone maps to a GitHub milestone. Each item within a milestone maps to an issue. M7–M9 can proceed in parallel. M10 depends on M7–M9 being stable. M11 is the gate.
+Each milestone maps to a GitHub milestone. Each item within a milestone maps to an issue. M7–M9 can proceed in parallel. M10 is the gate.
 
 **Guiding input**: [Khaos Machine technical evaluation](https://github.com/corpus-relica/reflex/issues/54) — the first independent assessment of Reflex identified these gaps as blockers for real-world adoption.
 
@@ -110,60 +110,13 @@ Implement snapshot operations on `ReflexEngine`:
 
 ---
 
-## M10: Parallel Execution
-
-**Goal**: Fork/join nodes that split execution into concurrent paths. This is the biggest formal model change — it moves from a single program counter to multiple.
-
-### Design Constraints
-
-The formal model changes from a pushdown automaton (single stack, single head) to a concurrent pushdown system. The append-only blackboard invariant is preserved — concurrent branches can all write, and writes from parallel branches are visible to the join node. No branch can see another branch's in-progress writes until the join.
-
-### Issues
-
-**M10-1: Fork/join types and DAG validation**
-Extend the type system:
-- `ForkNode`: a node with multiple outgoing edges that are ALL traversed (not selected by guard/agent — all paths execute)
-- `JoinNode`: a node that waits for all incoming fork paths to complete before proceeding
-- Fork/join must be paired — every fork has exactly one matching join
-- DAG validation update: detect unpaired forks/joins, validate that forked paths converge at the join, no cross-path edges
-- Each forked path gets its own blackboard scope (isolated writes). The join node merges scopes (append all entries from all branches)
-
-**M10-2: Concurrent execution engine**
-Implement parallel path execution:
-- At a fork node: create N execution contexts (one per outgoing edge), each with its own blackboard scope and position
-- Step function: steps ALL active contexts (round-robin or truly concurrent depending on runtime — TS: Promise.all, Go: goroutines)
-- At a join node: wait for all incoming paths to reach the join, merge blackboard scopes, continue with single execution context
-- Agent is called once per active context per step — agent must handle concurrent calls
-- Events: `fork:start`, `fork:path:enter`, `fork:path:complete`, `join:complete`
-
-**M10-3: Parallel blackboard semantics**
-Define merge behavior when forked paths rejoin:
-- Each fork path has an isolated blackboard scope (like a sub-workflow)
-- At join: all entries from all fork paths are appended to the parent scope
-- Conflict resolution: if two paths write the same key, both entries are preserved (append-only). The join node sees all values via `getAll(key)`. The `get(key)` returns the entry from the highest-numbered path (deterministic ordering: paths are numbered by edge order in the fork node)
-- Document the formal model change in DESIGN.md
-
-**M10-4: Test suite for parallel execution**
-- Fork into 2 paths, both complete, join succeeds
-- Fork into 3+ paths
-- Forked paths with different lengths (short path waits at join for long path)
-- Blackboard isolation: path A's writes not visible to path B during execution
-- Blackboard merge at join: all writes from all paths visible after join
-- Conflicting writes: same key written by multiple paths → both preserved, deterministic get() winner
-- Fork with guards on outgoing edges (guard filters which paths actually execute — partial fork)
-- Nested fork (fork within a forked path) — if supported
-- Fork + sub-workflow invocation (forked path contains an invocation node)
-- Agent receives correct context per path (isolated blackboard, correct node)
-
----
-
-## M11: API Stabilization
+## M10: API Stabilization
 
 **Goal**: Lock the public API surface. After v1.0.0, breaking changes require a major version bump.
 
 ### Issues
 
-**M11-1: Public API audit**
+**M10-1: Public API audit**
 Review every exported symbol against these criteria:
 - Is the name clear and conventional?
 - Is the type signature minimal (no unnecessary optionals, no overly broad types)?
@@ -172,16 +125,15 @@ Review every exported symbol against these criteria:
 - Document every public symbol with JSDoc (TS) / GoDoc (Go)
 - Output: annotated list of all public symbols with status (keep / rename / remove / deprecate)
 
-**M11-2: Migration guide**
+**M10-2: Migration guide**
 Document changes from v0.x to v1.0:
-- New features (declarative workflows, node contracts, persistence, parallel execution)
+- New features (declarative workflows, node contracts, persistence)
 - Breaking changes (if any — renamed types, changed signatures)
 - Upgrade path for existing v0.x consumers
 - Side-by-side examples: "v0.x way" vs "v1.0 way"
 
-**M11-3: v1.0.0 release**
+**M10-3: v1.0.0 release**
 - Final test pass (all implementations)
-- Update DESIGN.md with parallel execution model (Section 1 formal model, new Section for fork/join)
 - Update root README with v1.0 status and features
 - npm publish `@corpus-relica/reflex@1.0.0`
 - Go module tag `v1.0.0`
@@ -195,14 +147,14 @@ Document changes from v0.x to v1.0:
 ```
 M7 (Declarative Workflows) ──┐
                               │
-M8 (Node Contracts) ──────────┼──→ M10 (Parallel Execution) ──→ M11 (API Stabilization)
+M8 (Node Contracts) ──────────┼──→ M10 (API Stabilization)
                               │
 M9 (Persistence) ─────────────┘
 ```
 
 **Parallel opportunity**: M7, M8, M9 are independent and can proceed concurrently.
 
-**Critical path**: Any of M7/M8/M9 → M10 → M11
+**Critical path**: Any of M7/M8/M9 → M10
 
 ---
 
@@ -213,9 +165,8 @@ M9 (Persistence) ─────────────┘
 | M7 | `schema.json`, `loader.ts`, `loader.test.ts` | 3 | — |
 | M8 | `types.ts` (extend), `registry.ts` (extend), `contracts.test.ts` | 3 | — |
 | M9 | `snapshot.ts`, `persistence.ts`, `persistence.test.ts` | 3 | — |
-| M10 | `types.ts` (extend), `engine.ts` (extend), `parallel.test.ts` | 4 | M7–M9 |
-| M11 | `index.ts` (audit), `DESIGN.md` (update), release | 3 | M7–M10 |
-| **Total** | | **16** | |
+| M10 | `index.ts` (audit), docs, release | 3 | M7–M9 |
+| **Total** | | **12** | |
 
 ---
 
@@ -228,6 +179,7 @@ This roadmap targets the formal specification and the TypeScript reference imple
 ## What V1.0 Does NOT Include
 
 Explicitly out of scope (consider for v1.1+):
+- Parallel execution / fork-join (consumers handle concurrency in their agent/application code)
 - Typed blackboard values (runtime schema validation on entries)
 - Edge exhaustiveness checks (all possible outputs covered)
 - Built-in persistence adapters (file, database, etc.)

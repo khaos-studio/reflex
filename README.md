@@ -62,7 +62,7 @@ Reflex implements a pushdown automaton with append-only tape — equivalent to a
 ## Documentation
 
 - [DESIGN.md](docs/DESIGN.md) — Formal model, core types, runtime architecture, extension points, boundaries
-- [ROADMAP-v1.md](docs/ROADMAP-v1.md) — V1.0 roadmap (5 milestones, 16 issues: declarative workflows, node contracts, persistence, parallel execution, API stabilization)
+- [ROADMAP-v1.md](docs/ROADMAP-v1.md) — V1.0 roadmap (4 milestones, 12 issues: declarative workflows, node contracts, persistence, API stabilization)
 - [ROADMAP-v-alpha.md](docs/ROADMAP-v-alpha.md) — V-alpha implementation plan (6 milestones, 24 issues) — completed
 
 ## License
