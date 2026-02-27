@@ -6,77 +6,14 @@ Reflex provides a formally characterized execution model (Chomsky Type 1, contex
 
 > The name comes from the mirror system in SLR cameras that directs light through the correct path.
 
-## Install
+## Implementations
 
-```bash
-npm install @corpus-relica/reflex
-```
+| Language | Directory | Package | Status |
+|----------|-----------|---------|--------|
+| TypeScript | [`typescript/`](typescript/) | `@corpus-relica/reflex` | v-alpha — 231 tests, ESM + CJS |
+| Go | [`go/`](go/) | `github.com/corpus-relica/reflex/go` | v-alpha — stdlib only, zero dependencies |
 
-## Quick Start
-
-```typescript
-import {
-  createRegistry,
-  createEngine,
-  type Workflow,
-  type DecisionAgent,
-  type DecisionContext,
-  type Decision,
-} from '@corpus-relica/reflex';
-
-// 1. Define a workflow
-const workflow: Workflow = {
-  id: 'greeting',
-  entry: 'ASK',
-  nodes: {
-    ASK:    { id: 'ASK',    spec: { prompt: 'What is your name?' } },
-    GREET:  { id: 'GREET',  spec: { prompt: 'Say hello' } },
-    DONE:   { id: 'DONE',   spec: {} },
-  },
-  edges: [
-    { id: 'e1', from: 'ASK',   to: 'GREET', event: 'NEXT' },
-    { id: 'e2', from: 'GREET', to: 'DONE',  event: 'NEXT' },
-  ],
-};
-
-// 2. Implement a decision agent
-const agent: DecisionAgent = {
-  async resolve(ctx: DecisionContext): Promise<Decision> {
-    const nodeId = ctx.node.id;
-
-    if (nodeId === 'ASK') {
-      return {
-        type: 'advance',
-        edge: 'e1',
-        writes: [{ key: 'name', value: 'World' }],
-      };
-    }
-
-    if (nodeId === 'GREET') {
-      const name = ctx.blackboard.get('name');
-      return {
-        type: 'advance',
-        edge: 'e2',
-        writes: [{ key: 'greeting', value: `Hello, ${name}!` }],
-      };
-    }
-
-    // Terminal node — complete the workflow
-    return { type: 'complete' };
-  },
-};
-
-// 3. Run the engine
-const registry = createRegistry();
-registry.register(workflow);
-
-const engine = createEngine(registry, agent);
-await engine.init('greeting');
-const result = await engine.run();
-
-console.log(result.status);                  // 'completed'
-console.log(engine.blackboard().get('greeting')); // 'Hello, World!'
-```
+Both implementations conform to the shared [DESIGN.md](docs/DESIGN.md) specification. They are independent codebases targeting the same formal model.
 
 ## Core Concepts
 
@@ -120,49 +57,13 @@ console.log(engine.blackboard().get('greeting')); // 'Hello, World!'
 
 ## Formal Properties
 
-Reflex implements a pushdown automaton with append-only tape — equivalent to a linear-bounded automaton (Type 1, context-sensitive). The append-only constraint is the principled ceiling: maximal expressiveness while preserving the invariant that established context is never contradicted. See [DESIGN.md](DESIGN.md) Section 1 for the formal model and its caveats.
-
-## API Reference
-
-### Factory Functions
-
-```typescript
-createRegistry(): WorkflowRegistry
-```
-
-Create a workflow registry. Register workflows before creating an engine.
-
-```typescript
-createEngine(registry: WorkflowRegistry, agent: DecisionAgent, options?: EngineOptions): ReflexEngine
-```
-
-Create an engine bound to a registry and decision agent.
-
-### Types
-
-**Workflow definition** — `Workflow`, `Node`, `NodeSpec`, `Edge`, `InvocationSpec`, `ReturnMapping`, `Guard`, `BuiltinGuard`, `CustomGuard`
-
-**Decision agent** — `DecisionAgent`, `DecisionContext`, `Decision`, `BlackboardReader`, `BlackboardWrite`, `BlackboardEntry`, `BlackboardSource`
-
-**Engine results** — `StepResult`, `RunResult`, `EngineEvent`, `EngineStatus`, `EventHandler`, `StackFrame`
-
-**Errors** — `WorkflowValidationError`, `ValidationErrorCode`, `EngineError`
-
-See [DESIGN.md](DESIGN.md) for complete type definitions and semantics.
-
-## Status
-
-**v-alpha** — Implementation complete. All 6 milestones shipped: types & DAG validation, blackboard, guards, execution engine, integration tests, packaging. 231 tests passing. ESM + CJS dual output.
+Reflex implements a pushdown automaton with append-only tape — equivalent to a linear-bounded automaton (Type 1, context-sensitive). The append-only constraint is the principled ceiling: maximal expressiveness while preserving the invariant that established context is never contradicted. See [DESIGN.md](docs/DESIGN.md) Section 1 for the formal model and its caveats.
 
 ## Documentation
 
-- [DESIGN.md](DESIGN.md) — Formal model, core types, runtime architecture, extension points, boundaries
-- [ROADMAP-v-alpha.md](ROADMAP-v-alpha.md) — V-alpha implementation plan (6 milestones, 24 issues) — completed
+- [DESIGN.md](docs/DESIGN.md) — Formal model, core types, runtime architecture, extension points, boundaries
+- [ROADMAP-v-alpha.md](docs/ROADMAP-v-alpha.md) — V-alpha implementation plan (6 milestones, 24 issues) — completed
 
 ## License
 
 MIT — see [LICENSE](LICENSE)
-
-## Changelog
-
-**v0.1.0** — Initial release. DAG validation, scoped append-only blackboard, built-in + custom guards, execution engine with call stack composition, event system, suspend/resume. 231 tests.

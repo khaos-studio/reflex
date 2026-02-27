@@ -1,6 +1,6 @@
 # Reflex Go
 
-Go implementation of the [Reflex](../) DAG workflow engine, conforming to the shared [DESIGN.md](../DESIGN.md) specification.
+Go implementation of the [Reflex](../) DAG workflow engine, conforming to the shared [DESIGN.md](../docs/DESIGN.md) specification.
 
 ## Install
 
@@ -117,7 +117,7 @@ Features demonstrated: sub-workflow invocation with ReturnMap, scoped blackboard
 ## Relationship to TypeScript Implementation
 
 Both the TypeScript (`src/`) and Go (`go/`) implementations conform to the same
-[DESIGN.md](../DESIGN.md) specification. They share:
+[DESIGN.md](../docs/DESIGN.md) specification. They share:
 
 - The same formal model (Type 1, context-sensitive)
 - The same type definitions (Sections 2.1–2.11)
