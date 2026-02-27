@@ -2,12 +2,14 @@
 // Implements DESIGN.md Section 3.2
 // M4-1: Constructor, init(), state inspection.
 // M4-2: step() — single-workflow stepping with event emission.
+// M4-3: Stack operations — invocation and pop.
 // run() stubbed — implemented in M4-4.
 
 import {
   Workflow,
   Node,
   Edge,
+  BlackboardEntry,
   BlackboardReader,
   BlackboardSource,
   StackFrame,
@@ -104,6 +106,47 @@ export class ReflexEngine {
 
     const workflow = this._registry.get(this._currentWorkflowId)!;
     const node = workflow.nodes[this._currentNodeId]!;
+
+    // -- Invocation node handling (before guard evaluation and agent call) ---
+    if (node.invokes) {
+      const subWorkflow = this._registry.get(node.invokes.workflowId);
+      if (!subWorkflow) {
+        this._status = 'suspended';
+        this._emit('engine:error', {
+          error: new EngineError(
+            `Invocation failed: sub-workflow '${node.invokes.workflowId}' is not registered`,
+          ),
+          nodeId: this._currentNodeId,
+        });
+        return {
+          status: 'suspended',
+          reason: `Sub-workflow '${node.invokes.workflowId}' not found`,
+        };
+      }
+
+      // Push current frame onto the stack
+      const frame: StackFrame = {
+        workflowId: this._currentWorkflowId,
+        currentNodeId: this._currentNodeId,
+        returnMap: node.invokes.returnMap,
+        blackboard: [
+          ...this._currentBlackboard.getEntries(),
+        ] as BlackboardEntry[],
+      };
+      this._stack.unshift(frame);
+
+      // Start sub-workflow
+      this._currentWorkflowId = subWorkflow.id;
+      this._currentNodeId = subWorkflow.entry;
+      this._currentBlackboard = new ScopedBlackboard();
+
+      this._emit('workflow:push', { frame, workflow: subWorkflow });
+
+      const entryNode = subWorkflow.nodes[subWorkflow.entry]!;
+      this._emit('node:enter', { node: entryNode, workflow: subWorkflow });
+
+      return { status: 'invoked', workflow: subWorkflow, node: entryNode };
+    }
 
     // -- Guard evaluation ---------------------------------------------------
     const reader = this.blackboard();
@@ -222,10 +265,46 @@ export class ReflexEngine {
       return { status: 'completed' };
     }
 
-    // Stack pop — M4-3 implements this branch
-    throw new EngineError(
-      'complete with non-empty stack not implemented — see M4-3',
-    );
+    // -- Stack pop: sub-workflow complete, return to parent -----------------
+    const childBlackboard = this._currentBlackboard;
+    const frame = this._stack.shift()!;
+
+    // Reconstruct parent blackboard from frozen snapshot
+    const parentBlackboard = new ScopedBlackboard(frame.blackboard);
+    const parentWorkflow = this._registry.get(frame.workflowId)!;
+    const returnSource: BlackboardSource = {
+      workflowId: frame.workflowId,
+      nodeId: frame.currentNodeId,
+      stackDepth: this._stack.length,
+    };
+
+    // Execute returnMap: copy child values → parent blackboard
+    for (const mapping of frame.returnMap) {
+      const childValue = childBlackboard.reader().get(mapping.childKey);
+      if (childValue !== undefined) {
+        const newEntries = parentBlackboard.append(
+          [{ key: mapping.parentKey, value: childValue }],
+          returnSource,
+        );
+        this._emit('blackboard:write', {
+          entries: newEntries,
+          workflow: parentWorkflow,
+        });
+      }
+      // Missing childKey: skip gracefully (no write, no error)
+    }
+
+    // Restore parent state
+    this._currentWorkflowId = frame.workflowId;
+    this._currentNodeId = frame.currentNodeId;
+    this._currentBlackboard = parentBlackboard;
+
+    const invokingNode = parentWorkflow.nodes[frame.currentNodeId]!;
+
+    this._emit('workflow:pop', { frame, workflow: parentWorkflow });
+    this._emit('node:enter', { node: invokingNode, workflow: parentWorkflow });
+
+    return { status: 'popped', workflow: parentWorkflow, node: invokingNode };
   }
 
   async run(): Promise<RunResult> {
