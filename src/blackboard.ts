@@ -6,7 +6,7 @@ import {
   BlackboardReader,
   BlackboardSource,
   BlackboardWrite,
-} from './types';
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // Scoped Blackboard Reader
