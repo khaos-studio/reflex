@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateBuiltinGuard, evaluateCustomGuard, evaluateGuard } from './guards';
+import { evaluateBuiltinGuard, evaluateCustomGuard, evaluateGuard, filterEdges } from './guards';
 import { ScopedBlackboardReader } from './blackboard';
-import { BlackboardEntry, BuiltinGuard, CustomGuard, Guard } from './types';
+import { BlackboardEntry, BuiltinGuard, CustomGuard, Edge, Guard } from './types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -270,5 +270,136 @@ describe('evaluateGuard — dispatch', () => {
     const guard: Guard = { type: 'custom', evaluate: () => { throw err; } };
     const bb = readerWith();
     expect(evaluateGuard(guard, bb)).toEqual({ ok: false, error: err });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Edge Filtering
+// ---------------------------------------------------------------------------
+
+/** Shorthand: create a minimal Edge. */
+function edge(id: string, from: string, to: string, guard?: Guard): Edge {
+  return { id, from, to, event: 'NEXT', guard };
+}
+
+describe('filterEdges', () => {
+  // -----------------------------------------------------------------------
+  // Basic cases
+  // -----------------------------------------------------------------------
+
+  it('returns all edges when none have guards', () => {
+    const edges = [edge('e1', 'A', 'B'), edge('e2', 'A', 'C')];
+    const bb = readerWith();
+    const result = filterEdges('A', edges, bb);
+    expect(result).toEqual({ ok: true, edges });
+  });
+
+  it('returns empty array when node has no outgoing edges', () => {
+    const edges = [edge('e1', 'X', 'Y')];
+    const bb = readerWith();
+    const result = filterEdges('A', edges, bb);
+    expect(result).toEqual({ ok: true, edges: [] });
+  });
+
+  it('returns empty array when all guards fail', () => {
+    const edges = [
+      edge('e1', 'A', 'B', { type: 'exists', key: 'missing' }),
+      edge('e2', 'A', 'C', { type: 'exists', key: 'also-missing' }),
+    ];
+    const bb = readerWith();
+    const result = filterEdges('A', edges, bb);
+    expect(result).toEqual({ ok: true, edges: [] });
+  });
+
+  // -----------------------------------------------------------------------
+  // No-guard cases
+  // -----------------------------------------------------------------------
+
+  it('includes edge with no guard unconditionally', () => {
+    const e = edge('e1', 'A', 'B');
+    const bb = readerWith();
+    const result = filterEdges('A', [e], bb);
+    expect(result).toEqual({ ok: true, edges: [e] });
+  });
+
+  // -----------------------------------------------------------------------
+  // Guard evaluation cases
+  // -----------------------------------------------------------------------
+
+  it('includes edge whose guard passes', () => {
+    const e = edge('e1', 'A', 'B', { type: 'exists', key: 'color' });
+    const bb = readerWith(entry('color', 'red'));
+    const result = filterEdges('A', [e], bb);
+    expect(result).toEqual({ ok: true, edges: [e] });
+  });
+
+  it('excludes edge whose guard fails', () => {
+    const e = edge('e1', 'A', 'B', { type: 'exists', key: 'missing' });
+    const bb = readerWith();
+    const result = filterEdges('A', [e], bb);
+    expect(result).toEqual({ ok: true, edges: [] });
+  });
+
+  // -----------------------------------------------------------------------
+  // Fan-out with mixed results
+  // -----------------------------------------------------------------------
+
+  it('filters correctly in fan-out: mixed guard results', () => {
+    const e1 = edge('e1', 'A', 'B');                                            // no guard → valid
+    const e2 = edge('e2', 'A', 'C', { type: 'exists', key: 'color' });          // passes
+    const e3 = edge('e3', 'A', 'D', { type: 'equals', key: 'color', value: 'blue' }); // fails
+    const bb = readerWith(entry('color', 'red'));
+    const result = filterEdges('A', [e1, e2, e3], bb);
+    expect(result).toEqual({ ok: true, edges: [e1, e2] });
+  });
+
+  // -----------------------------------------------------------------------
+  // Error propagation
+  // -----------------------------------------------------------------------
+
+  it('returns { ok: false, error } when a custom guard throws', () => {
+    const err = new Error('guard broke');
+    const e1 = edge('e1', 'A', 'B', { type: 'custom', evaluate: () => { throw err; } });
+    const bb = readerWith();
+    const result = filterEdges('A', [e1], bb);
+    expect(result).toEqual({ ok: false, error: err });
+  });
+
+  it('short-circuits on first guard error', () => {
+    const err = new Error('boom');
+    let secondGuardCalled = false;
+    const e1 = edge('e1', 'A', 'B', { type: 'custom', evaluate: () => { throw err; } });
+    const e2 = edge('e2', 'A', 'C', {
+      type: 'custom',
+      evaluate: () => { secondGuardCalled = true; return true; },
+    });
+    const bb = readerWith();
+    const result = filterEdges('A', [e1, e2], bb);
+    expect(result).toEqual({ ok: false, error: err });
+    expect(secondGuardCalled).toBe(false);
+  });
+
+  // -----------------------------------------------------------------------
+  // Cross-scope blackboard reads
+  // -----------------------------------------------------------------------
+
+  it('evaluates guards against scoped blackboard — parent scope values visible', () => {
+    const e = edge('e1', 'A', 'B', { type: 'exists', key: 'parentKey' });
+    const bb = readerWithScopes([], [entry('parentKey', 'parentValue')]);
+    const result = filterEdges('A', [e], bb);
+    expect(result).toEqual({ ok: true, edges: [e] });
+  });
+
+  // -----------------------------------------------------------------------
+  // nodeId filtering
+  // -----------------------------------------------------------------------
+
+  it('ignores edges belonging to other nodes', () => {
+    const e1 = edge('e1', 'A', 'B');
+    const e2 = edge('e2', 'X', 'Y');
+    const e3 = edge('e3', 'A', 'C');
+    const bb = readerWith();
+    const result = filterEdges('A', [e1, e2, e3], bb);
+    expect(result).toEqual({ ok: true, edges: [e1, e3] });
   });
 });
