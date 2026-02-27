@@ -157,8 +157,12 @@ See [DESIGN.md](DESIGN.md) for complete type definitions and semantics.
 ## Documentation
 
 - [DESIGN.md](DESIGN.md) — Formal model, core types, runtime architecture, extension points, boundaries
-- [ROADMAP.md](ROADMAP.md) — Phased implementation plan (6 milestones, 24 issues)
+- [ROADMAP-v-alpha.md](ROADMAP-v-alpha.md) — V-alpha implementation plan (6 milestones, 24 issues) — completed
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE)
+MIT — see [LICENSE](LICENSE)
+
+## Changelog
+
+**v0.1.0** — Initial release. DAG validation, scoped append-only blackboard, built-in + custom guards, execution engine with call stack composition, event system, suspend/resume. 231 tests.
