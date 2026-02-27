@@ -92,9 +92,9 @@ Reflex workflows serve as both **execution traces** and **proofs of intent**:
 
 - **Execution traces** (v-alpha): The append-only blackboard + event emission provides a complete record of what happened during a session — every write, every transition, every push/pop. This is free by construction.
 
-- **Proofs of intent** (post-alpha): The workflow definition itself is a declaration of what SHOULD happen. With future additions (declared node inputs/outputs, edge exhaustiveness checks, returnMap completeness validation), workflows become statically analyzable — you can reason about their properties *without running them*.
+- **Proofs of intent** (v1.0): The workflow definition itself is a declaration of what SHOULD happen. Node contracts (declared inputs/outputs, Section 6.1) enable static verification at registration time — you can reason about workflow properties *without running them*. Future additions (edge exhaustiveness checks, returnMap completeness) extend this further.
 
-The v-alpha delivers traces. Post-alpha builds toward intent verification. The architecture supports both because the formal model is sound — the workflow definition IS the program.
+The v-alpha delivers traces. V1.0 builds toward intent verification via node contracts. The architecture supports both because the formal model is sound — the workflow definition IS the program.
 
 ---
 
@@ -492,7 +492,7 @@ The engine emits events at each lifecycle point in deterministic order (see Sect
 ### What Reflex is NOT
 
 - A state machine library (no cycles, no event-driven reactive model)
-- A BPMN engine (no parallel execution, no compensation, no timers)
+- A BPMN engine (no parallel execution — by design, not limitation — no compensation, no timers)
 - An LLM framework (no prompt management, no model integration)
 - A UI framework (no rendering, no components)
 - A persistence layer (no database, no ORM)
@@ -512,17 +512,34 @@ This is analogous to event sourcing, append-only ledgers, and immutable data str
 
 ---
 
-## 6. Deferred to Post-Alpha
+## 6. Scope and Future Work
 
-The following are explicitly out of scope for v-alpha but tracked for future consideration:
+### 6.1 Planned for V1.0
 
-- **Parallel nodes**: Fork/join within a single DAG
-- **Typed blackboard values**: Schema-level typing for blackboard entries
-- **Serializable workflow format**: JSON/YAML workflow definition language (v-alpha is programmatic TypeScript only)
-- **Node input/output declarations**: Explicit declaration of which blackboard keys a node reads/writes — "honesty contracts" for validation and tooling, not execution semantics. This is the path toward workflows as proofs of intent (see Section 1.6)
+The following items from v-alpha's deferred list are now planned for v1.0 (see [ROADMAP-v1.md](ROADMAP-v1.md)):
+
+- **Declarative workflows** (M7): JSON schema for workflow definitions, loader with validation, cross-language portability (same JSON loadable by TS and Go)
+- **Node contracts** (M8): Input/output declarations on nodes — which blackboard keys a node reads/writes. Static verification at registration time catches wiring errors before execution. This is the path toward workflows as proofs of intent (see Section 1.6)
+- **Persistence** (M9): Serializable engine snapshots for save/restore across process boundaries. Enables real human-in-the-loop workflows that span hours or days
+- **ReturnMap verification** (partial, M8-2): Static check that returnMap target keys appear in sub-workflow terminal nodes' declared outputs
+
+### 6.2 Permanently Out of Scope
+
+These are deliberate non-goals of the Reflex engine — not deferred, but excluded by design:
+
+- **Parallel execution / fork-join**: The formal model is a pushdown automaton with a single program counter. Fork/join introduces concurrent program counters, fundamentally changing what "step" means and breaking the deterministic trace property. Consumers who need concurrency handle it in their agent or application code — Reflex orchestrates the sequential decision path, not the parallel execution.
+- **Built-in decision agents**: Reflex provides the interface, not implementations. LLM agents, rule engines, human UIs — these are consumer concerns.
+- **Built-in persistence adapters**: Reflex defines the snapshot format and adapter interface. Consumers provide their own storage (file, database, etc.).
+- **Distributed execution**: Engine instances across processes or machines. Reflex is a single-process, single-session engine.
+
+### 6.3 Deferred (Post-V1.0)
+
+The following remain interesting but are not planned for v1.0:
+
+- **Typed blackboard values**: Runtime schema validation on blackboard entries
 - **Edge exhaustiveness checks**: Static verification that all possible blackboard states at a fan-out point are covered by guards
-- **ReturnMap completeness validation**: Static check that a sub-workflow's expected outputs are actually produced
 - **Parent-to-child value passing**: Explicit push of specific parent values into child scope on invocation (currently unnecessary because child can read parent scope via the scope chain)
+- **Hot-reload workflows**: Swap workflow definition mid-execution
 
 ---
 
