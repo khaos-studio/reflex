@@ -1,7 +1,7 @@
 // Reflex — Guard Evaluation
 // Implements DESIGN.md Section 2.8
 
-import { BuiltinGuard, CustomGuard, Guard, Edge, BlackboardReader } from './types';
+import { BuiltinGuard, CustomGuard, Guard, Edge, BlackboardReader } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Guard Result Type

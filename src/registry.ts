@@ -1,7 +1,7 @@
 // Reflex — Workflow Registry with DAG Validation
 // Implements DESIGN.md Section 3.3
 
-import { Workflow } from './types';
+import { Workflow } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Validation Error

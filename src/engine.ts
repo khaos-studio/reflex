@@ -22,10 +22,10 @@ import {
   EngineEvent,
   EventHandler,
   EngineStatus,
-} from './types';
-import { WorkflowRegistry } from './registry';
-import { ScopedBlackboard, ScopedBlackboardReader } from './blackboard';
-import { filterEdges } from './guards';
+} from './types.js';
+import { WorkflowRegistry } from './registry.js';
+import { ScopedBlackboard, ScopedBlackboardReader } from './blackboard.js';
+import { filterEdges } from './guards.js';
 
 // ---------------------------------------------------------------------------
 // Engine Error
