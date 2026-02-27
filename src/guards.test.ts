@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateBuiltinGuard } from './guards';
+import { evaluateBuiltinGuard, evaluateCustomGuard, evaluateGuard } from './guards';
 import { ScopedBlackboardReader } from './blackboard';
-import { BlackboardEntry, BuiltinGuard } from './types';
+import { BlackboardEntry, BuiltinGuard, CustomGuard, Guard } from './types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -156,5 +156,119 @@ describe('evaluateBuiltinGuard', () => {
       const bb = readerWith();
       expect(evaluateBuiltinGuard(guard, bb)).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom Guard Evaluator
+// ---------------------------------------------------------------------------
+
+describe('evaluateCustomGuard', () => {
+  it('returns { ok: true, passed: true } when evaluate returns true', () => {
+    const guard: CustomGuard = { type: 'custom', evaluate: () => true };
+    const bb = readerWith(entry('x', 1));
+    const result = evaluateCustomGuard(guard, bb);
+    expect(result).toEqual({ ok: true, passed: true });
+  });
+
+  it('returns { ok: true, passed: false } when evaluate returns false', () => {
+    const guard: CustomGuard = { type: 'custom', evaluate: () => false };
+    const bb = readerWith(entry('x', 1));
+    const result = evaluateCustomGuard(guard, bb);
+    expect(result).toEqual({ ok: true, passed: false });
+  });
+
+  it('returns { ok: false, error } when evaluate throws an Error', () => {
+    const err = new Error('guard broke');
+    const guard: CustomGuard = { type: 'custom', evaluate: () => { throw err; } };
+    const bb = readerWith();
+    const result = evaluateCustomGuard(guard, bb);
+    expect(result).toEqual({ ok: false, error: err });
+  });
+
+  it('returns { ok: false, error } when evaluate throws a non-Error (string)', () => {
+    const guard: CustomGuard = { type: 'custom', evaluate: () => { throw 'boom'; } };
+    const bb = readerWith();
+    const result = evaluateCustomGuard(guard, bb);
+    expect(result).toEqual({ ok: false, error: 'boom' });
+  });
+
+  it('passes the BlackboardReader to evaluate — can use reader.get()', () => {
+    const guard: CustomGuard = {
+      type: 'custom',
+      evaluate: (bb) => bb.get('color') === 'red',
+    };
+    const bb = readerWith(entry('color', 'red'));
+    const result = evaluateCustomGuard(guard, bb);
+    expect(result).toEqual({ ok: true, passed: true });
+  });
+
+  it('passes scoped blackboard — cross-scope reads work inside custom guard', () => {
+    const guard: CustomGuard = {
+      type: 'custom',
+      evaluate: (bb) => bb.get('parentKey') === 'parentValue',
+    };
+    const bb = readerWithScopes([], [entry('parentKey', 'parentValue')]);
+    const result = evaluateCustomGuard(guard, bb);
+    expect(result).toEqual({ ok: true, passed: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unified Guard Evaluator (dispatch)
+// ---------------------------------------------------------------------------
+
+describe('evaluateGuard — dispatch', () => {
+  // Built-in dispatch
+
+  it('dispatches exists guard → { ok: true, passed: true }', () => {
+    const guard: Guard = { type: 'exists', key: 'x' };
+    const bb = readerWith(entry('x', 1));
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: true, passed: true });
+  });
+
+  it('dispatches exists guard (missing) → { ok: true, passed: false }', () => {
+    const guard: Guard = { type: 'exists', key: 'x' };
+    const bb = readerWith();
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: true, passed: false });
+  });
+
+  it('dispatches equals guard → { ok: true, passed: true }', () => {
+    const guard: Guard = { type: 'equals', key: 'status', value: 'on' };
+    const bb = readerWith(entry('status', 'on'));
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: true, passed: true });
+  });
+
+  it('dispatches not-exists guard → { ok: true, passed: true }', () => {
+    const guard: Guard = { type: 'not-exists', key: 'x' };
+    const bb = readerWith();
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: true, passed: true });
+  });
+
+  it('dispatches not-equals guard → { ok: true, passed: true }', () => {
+    const guard: Guard = { type: 'not-equals', key: 'status', value: 'off' };
+    const bb = readerWith(entry('status', 'on'));
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: true, passed: true });
+  });
+
+  // Custom dispatch
+
+  it('dispatches custom guard returning true → { ok: true, passed: true }', () => {
+    const guard: Guard = { type: 'custom', evaluate: () => true };
+    const bb = readerWith();
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: true, passed: true });
+  });
+
+  it('dispatches custom guard returning false → { ok: true, passed: false }', () => {
+    const guard: Guard = { type: 'custom', evaluate: () => false };
+    const bb = readerWith();
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: true, passed: false });
+  });
+
+  it('dispatches custom guard that throws → { ok: false, error }', () => {
+    const err = new Error('fail');
+    const guard: Guard = { type: 'custom', evaluate: () => { throw err; } };
+    const bb = readerWith();
+    expect(evaluateGuard(guard, bb)).toEqual({ ok: false, error: err });
   });
 });
