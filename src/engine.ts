@@ -1,15 +1,19 @@
-// Reflex — Execution Engine Scaffold
+// Reflex — Execution Engine
 // Implements DESIGN.md Section 3.2
-// M4-1: Constructor, init(), and state inspection methods.
-// step(), run(), and on() are stubbed — implemented in M4-2 through M4-5.
+// M4-1: Constructor, init(), state inspection.
+// M4-2: step() — single-workflow stepping with event emission.
+// run() stubbed — implemented in M4-4.
 
 import {
   Workflow,
   Node,
   Edge,
   BlackboardReader,
+  BlackboardSource,
   StackFrame,
   DecisionAgent,
+  DecisionContext,
+  Decision,
   StepResult,
   RunResult,
   EngineEvent,
@@ -49,7 +53,7 @@ export class ReflexEngine {
   // Call stack — suspended workflow frames (active frame is NOT on the stack)
   private _stack: StackFrame[] = [];
 
-  // Event handlers — populated in M4-5
+  // Event handlers
   private readonly _handlers: Map<EngineEvent, EventHandler[]> = new Map();
 
   constructor(registry: WorkflowRegistry, agent: DecisionAgent) {
@@ -80,7 +84,148 @@ export class ReflexEngine {
   }
 
   async step(): Promise<StepResult> {
-    throw new EngineError('step() not implemented — see M4-2');
+    // -- Precondition guards ------------------------------------------------
+    if (this._status !== 'running' && this._status !== 'suspended') {
+      throw new EngineError(
+        `step() called in invalid state: '${this._status}' — engine must be 'running' or 'suspended'`,
+      );
+    }
+    if (
+      this._currentWorkflowId === null ||
+      this._currentNodeId === null ||
+      this._currentBlackboard === null
+    ) {
+      throw new EngineError('step() called before init()');
+    }
+    // Resume from suspension
+    if (this._status === 'suspended') {
+      this._status = 'running';
+    }
+
+    const workflow = this._registry.get(this._currentWorkflowId)!;
+    const node = workflow.nodes[this._currentNodeId]!;
+
+    // -- Guard evaluation ---------------------------------------------------
+    const reader = this.blackboard();
+    const filterResult = filterEdges(
+      this._currentNodeId,
+      workflow.edges,
+      reader,
+    );
+    if (!filterResult.ok) {
+      this._status = 'suspended';
+      this._emit('engine:error', {
+        error: filterResult.error,
+        nodeId: this._currentNodeId,
+      });
+      return { status: 'suspended', reason: 'Guard evaluation error' };
+    }
+    const validEdges = filterResult.edges;
+
+    // -- Build DecisionContext and call agent --------------------------------
+    const context: DecisionContext = {
+      workflow,
+      node,
+      blackboard: reader,
+      validEdges,
+      stack: this.stack(),
+    };
+
+    let decision: Decision;
+    try {
+      decision = await this._agent.resolve(context);
+    } catch (error) {
+      this._status = 'suspended';
+      this._emit('engine:error', { error, nodeId: this._currentNodeId });
+      return { status: 'suspended', reason: 'Decision agent threw an error' };
+    }
+
+    // -- Handle advance -----------------------------------------------------
+    if (decision.type === 'advance') {
+      const chosenEdge = validEdges.find((e) => e.id === decision.edge);
+      if (!chosenEdge) {
+        this._status = 'suspended';
+        this._emit('engine:error', {
+          error: new EngineError(
+            `Decision agent chose invalid edge '${decision.edge}'`,
+          ),
+          nodeId: this._currentNodeId,
+        });
+        return { status: 'suspended', reason: 'Invalid edge selection' };
+      }
+
+      this._emit('node:exit', { node, workflow });
+      this._emit('edge:traverse', { edge: chosenEdge, workflow });
+
+      if (decision.writes && decision.writes.length > 0) {
+        const source: BlackboardSource = {
+          workflowId: this._currentWorkflowId,
+          nodeId: this._currentNodeId,
+          stackDepth: this._stack.length,
+        };
+        const newEntries = this._currentBlackboard.append(
+          decision.writes,
+          source,
+        );
+        this._emit('blackboard:write', { entries: newEntries, workflow });
+      }
+
+      this._currentNodeId = chosenEdge.to;
+      const nextNode = workflow.nodes[chosenEdge.to]!;
+      this._emit('node:enter', { node: nextNode, workflow });
+
+      return { status: 'advanced', node: nextNode };
+    }
+
+    // -- Handle suspend -----------------------------------------------------
+    if (decision.type === 'suspend') {
+      this._status = 'suspended';
+      this._emit('engine:suspend', {
+        reason: decision.reason,
+        nodeId: this._currentNodeId,
+      });
+      return { status: 'suspended', reason: decision.reason };
+    }
+
+    // -- Handle complete ----------------------------------------------------
+    // Enforce terminal-node-only (structural: no outgoing edges)
+    const hasOutgoing = workflow.edges.some(
+      (e) => e.from === this._currentNodeId,
+    );
+    if (hasOutgoing) {
+      this._status = 'suspended';
+      this._emit('engine:error', {
+        error: new EngineError(
+          `Decision agent returned 'complete' at non-terminal node '${this._currentNodeId}'`,
+        ),
+        nodeId: this._currentNodeId,
+      });
+      return { status: 'suspended', reason: 'complete at non-terminal node' };
+    }
+
+    if (decision.writes && decision.writes.length > 0) {
+      const source: BlackboardSource = {
+        workflowId: this._currentWorkflowId,
+        nodeId: this._currentNodeId,
+        stackDepth: this._stack.length,
+      };
+      const newEntries = this._currentBlackboard.append(
+        decision.writes,
+        source,
+      );
+      this._emit('blackboard:write', { entries: newEntries, workflow });
+    }
+
+    if (this._stack.length === 0) {
+      this._status = 'completed';
+      this._emit('engine:complete', { workflow });
+      return { status: 'completed' };
+    }
+
+    // Stack pop — M4-3 implements this branch
+    throw new EngineError(
+      'complete with non-empty stack not implemented — see M4-3',
+    );
   }
 
   async run(): Promise<RunResult> {
@@ -147,10 +292,21 @@ export class ReflexEngine {
   }
 
   // -------------------------------------------------------------------------
-  // Events (stubbed — implemented in M4-5)
+  // Events
   // -------------------------------------------------------------------------
 
-  on(_event: EngineEvent, _handler: EventHandler): void {
-    // Implemented in M4-5
+  on(event: EngineEvent, handler: EventHandler): void {
+    const handlers = this._handlers.get(event) ?? [];
+    handlers.push(handler);
+    this._handlers.set(event, handlers);
+  }
+
+  private _emit(event: EngineEvent, payload?: unknown): void {
+    const handlers = this._handlers.get(event);
+    if (handlers) {
+      for (const handler of handlers) {
+        handler(payload);
+      }
+    }
   }
 }
