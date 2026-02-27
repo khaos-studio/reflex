@@ -4,6 +4,7 @@
 // M4-2: step() — single-workflow stepping with event emission.
 // M4-3: Stack operations — invocation and pop.
 // M4-4: run() — step until done or suspended.
+// M4-5: Event emission — audit and ordering confirmation.
 
 import {
   Workflow,
@@ -81,6 +82,8 @@ export class ReflexEngine {
     this._currentBlackboard = new ScopedBlackboard();
     this._stack = [];
     this._status = 'running';
+    // No node:enter emitted — init() is pure setup (DESIGN.md Section 1.4
+    // separates INIT from LOOP). Use currentNode() after init() if needed.
 
     return this._sessionId;
   }
@@ -140,6 +143,10 @@ export class ReflexEngine {
       this._currentNodeId = subWorkflow.entry;
       this._currentBlackboard = new ScopedBlackboard();
 
+      // Event order: workflow:push then node:enter (sub-workflow entry).
+      // DESIGN.md's "node:enter → workflow:push" describes the cross-step
+      // session sequence — the prior step's advance already emitted node:enter
+      // for the invoking node. Symmetric with pop: workflow:pop → node:enter.
       this._emit('workflow:push', { frame, workflow: subWorkflow });
 
       const entryNode = subWorkflow.nodes[subWorkflow.entry]!;
@@ -411,8 +418,8 @@ export class ReflexEngine {
     const result = filterEdges(this._currentNodeId, workflow.edges, reader);
 
     if (!result.ok) {
-      // Guard evaluation error — proper engine:error event emission is
-      // implemented in M4-5. For now, return no valid edges.
+      // State inspector — no event emission. Guard errors during execution
+      // are handled by step() with proper engine:error emission.
       return [];
     }
 
