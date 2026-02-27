@@ -56,6 +56,11 @@ export class ReflexEngine {
   // Call stack — suspended workflow frames (active frame is NOT on the stack)
   private _stack: StackFrame[] = [];
 
+  // After a stack pop, the engine resumes at the invoking node. This flag
+  // prevents re-triggering the invocation on the next step() — the agent
+  // should run normal edge logic instead.
+  private _skipInvocation = false;
+
   // Event handlers
   private readonly _handlers: Map<EngineEvent, EventHandler[]> = new Map();
 
@@ -81,6 +86,7 @@ export class ReflexEngine {
     this._currentNodeId = workflow.entry;
     this._currentBlackboard = new ScopedBlackboard();
     this._stack = [];
+    this._skipInvocation = false;
     this._status = 'running';
     // No node:enter emitted — init() is pure setup (DESIGN.md Section 1.4
     // separates INIT from LOOP). Use currentNode() after init() if needed.
@@ -111,7 +117,7 @@ export class ReflexEngine {
     const node = workflow.nodes[this._currentNodeId]!;
 
     // -- Invocation node handling (before guard evaluation and agent call) ---
-    if (node.invokes) {
+    if (node.invokes && !this._skipInvocation) {
       const subWorkflow = this._registry.get(node.invokes.workflowId);
       if (!subWorkflow) {
         this._status = 'suspended';
@@ -154,6 +160,7 @@ export class ReflexEngine {
 
       return { status: 'invoked', workflow: subWorkflow, node: entryNode };
     }
+    this._skipInvocation = false;
 
     // -- Guard evaluation ---------------------------------------------------
     const reader = this.blackboard();
@@ -301,10 +308,11 @@ export class ReflexEngine {
       // Missing childKey: skip gracefully (no write, no error)
     }
 
-    // Restore parent state
+    // Restore parent state — skip re-invocation on the next step()
     this._currentWorkflowId = frame.workflowId;
     this._currentNodeId = frame.currentNodeId;
     this._currentBlackboard = parentBlackboard;
+    this._skipInvocation = true;
 
     const invokingNode = parentWorkflow.nodes[frame.currentNodeId]!;
 
