@@ -73,6 +73,80 @@ func TestEngineInit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Init — node:enter for entry node
+// ---------------------------------------------------------------------------
+
+func TestEngineInitEntryNodeEnter(t *testing.T) {
+	t.Run("emits node:enter for entry node during init", func(t *testing.T) {
+		e, _ := setupLinear()
+
+		var enterEvents []Event
+		e.On(EventNodeEnter, func(ev Event) {
+			enterEvents = append(enterEvents, ev)
+		})
+
+		_, _ = e.Init("linear")
+
+		if len(enterEvents) != 1 {
+			t.Fatalf("expected 1 node:enter from init, got %d", len(enterEvents))
+		}
+		if enterEvents[0].NodeID != "A" {
+			t.Errorf("expected node:enter for A, got %s", enterEvents[0].NodeID)
+		}
+		if enterEvents[0].WorkflowID != "linear" {
+			t.Errorf("expected workflowId=linear, got %s", enterEvents[0].WorkflowID)
+		}
+	})
+
+	t.Run("node:enter fires after seed blackboard:write", func(t *testing.T) {
+		r := NewRegistry()
+		_ = r.Register(linearWorkflow("linear"))
+		e := NewEngine(r, autoAdvanceAgent())
+
+		var events []EventType
+		e.On(EventBlackboardWrite, func(_ Event) { events = append(events, EventBlackboardWrite) })
+		e.On(EventNodeEnter, func(_ Event) { events = append(events, EventNodeEnter) })
+
+		_, _ = e.Init("linear", InitOptions{
+			Blackboard: []BlackboardWrite{{Key: "x", Value: 1}},
+		})
+
+		if len(events) != 2 {
+			t.Fatalf("expected 2 events from init, got %d: %v", len(events), events)
+		}
+		if events[0] != EventBlackboardWrite {
+			t.Errorf("expected blackboard:write first, got %s", events[0])
+		}
+		if events[1] != EventNodeEnter {
+			t.Errorf("expected node:enter second, got %s", events[1])
+		}
+	})
+
+	t.Run("no double node:enter on first step after init", func(t *testing.T) {
+		e, _ := setupLinear()
+
+		var enterNodes []string
+		e.On(EventNodeEnter, func(ev Event) {
+			enterNodes = append(enterNodes, ev.NodeID)
+		})
+
+		_, _ = e.Init("linear")
+		_, _ = e.Step(context.Background()) // A→B
+
+		// Expect: A (from Init), B (from first Step). NOT A, A, B.
+		if len(enterNodes) != 2 {
+			t.Fatalf("expected 2 node:enter events (A from init, B from step), got %d: %v", len(enterNodes), enterNodes)
+		}
+		if enterNodes[0] != "A" {
+			t.Errorf("expected first node:enter for A, got %s", enterNodes[0])
+		}
+		if enterNodes[1] != "B" {
+			t.Errorf("expected second node:enter for B, got %s", enterNodes[1])
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Step — linear workflow
 // ---------------------------------------------------------------------------
 
@@ -487,10 +561,12 @@ func TestEngineEvents(t *testing.T) {
 	_, _ = e.Run(context.Background())
 
 	// For A→B→C (linear, 2 edges), expect:
+	// node:enter (Init — entry node A)
 	// node:exit, edge:traverse, node:enter (A→B)
 	// node:exit, edge:traverse, node:enter (B→C)
 	// engine:complete
 	expectedTypes := []EventType{
+		EventNodeEnter,
 		EventNodeExit, EventEdgeTraverse, EventNodeEnter,
 		EventNodeExit, EventEdgeTraverse, EventNodeEnter,
 		EventEngineComplete,

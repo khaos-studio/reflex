@@ -78,12 +78,12 @@ func TestE2EEventTracking(t *testing.T) {
 	_, _ = e.Init("linear")
 	_, _ = e.Run(context.Background())
 
-	// A→B, B→C = 2 edge traversals, 2 node enters
+	// A (Init), A→B, B→C = 2 edge traversals, 3 node enters
 	if edgeTraversals != 2 {
 		t.Errorf("expected 2 edge traversals, got %d", edgeTraversals)
 	}
-	if nodeEnters != 2 {
-		t.Errorf("expected 2 node enters, got %d", nodeEnters)
+	if nodeEnters != 3 {
+		t.Errorf("expected 3 node enters, got %d", nodeEnters)
 	}
 }
 
