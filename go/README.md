@@ -95,6 +95,21 @@ type BlackboardReader interface {
 &BuiltinGuard{Type: GuardNotEquals, Key: "my_key", Value: "unexpected"}
 ```
 
+`equals` and `not-equals` use numeric-aware comparison: `int(5)` matches `float64(5.0)`. This handles JSON round-trips where numbers become `float64`. Non-numeric types use `reflect.DeepEqual`.
+
+### Type-Safe Blackboard Access
+
+Package-level helpers for safe type extraction from `BlackboardReader`:
+
+```go
+name, ok := reflex.BBString(bb, "name")     // string
+flag, ok := reflex.BBBool(bb, "active")      // bool
+score, ok := reflex.BBFloat(bb, "score")     // float64 (handles int, json.Number)
+count, ok := reflex.BBInt(bb, "count")       // int (handles float64 from JSON)
+```
+
+These handle the common issue where `encoding/json` converts all numbers to `float64`.
+
 ## Examples
 
 See the [`examples/`](./examples/) directory:
@@ -159,5 +174,5 @@ Both the TypeScript (`src/`) and Go (`go/`) implementations conform to the same
 Go-specific differences:
 - `context.Context` on `Resolve()` (Go convention for cancellation/timeouts)
 - `sync.RWMutex` on `ScopedBlackboard` (Go supports concurrent access)
-- `reflect.DeepEqual` for guard value comparison (Go equivalent of `===`)
+- Numeric-aware guard equality with `reflect.DeepEqual` fallback
 - Table-driven tests with `t.Run()` subtests (Go testing idiom)

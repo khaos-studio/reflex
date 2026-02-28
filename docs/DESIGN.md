@@ -263,6 +263,8 @@ interface CustomGuard {
 
 Guards are evaluated against the scoped blackboard (full scope chain). Built-in guards cover common cases; custom guards allow arbitrary logic. An edge with no guard is always valid.
 
+**Numeric-aware equality**: The `equals` and `not-equals` guards use numeric-aware comparison: `int(5)` equals `float64(5.0)`. This ensures guards evaluate correctly after JSON round-trips where all numbers become `float64`. Non-numeric types use strict equality (`reflect.DeepEqual` in Go, `===` in TypeScript).
+
 **Formal contract for custom guards**: Custom guard functions must be **total, terminating, and side-effect free**. They receive a read-only blackboard view and return a boolean. Violations of this contract (infinite loops, external state mutation, I/O) break the Type 1 formal ceiling. Built-in guards satisfy this contract by construction.
 
 ### 2.9 Call Stack
