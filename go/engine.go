@@ -81,6 +81,15 @@ func (e *Engine) Init(workflowID string, opts ...InitOptions) (string, error) {
 		})
 	}
 
+	// Emit node:enter for the entry node so every node:exit in the first
+	// step() has a matching node:enter.
+	entryNode := w.Nodes[w.Entry]
+	e.emit(EventNodeEnter, Event{
+		Type:       EventNodeEnter,
+		NodeID:     entryNode.ID,
+		WorkflowID: workflowID,
+	})
+
 	return e.sessionID, nil
 }
 
