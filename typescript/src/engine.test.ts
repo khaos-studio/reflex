@@ -306,6 +306,66 @@ describe('ReflexEngine', () => {
   });
 
   // -----------------------------------------------------------------------
+  // init() — entry node event
+  // -----------------------------------------------------------------------
+
+  describe('init() — entry node event', () => {
+    it('emits node:enter for the entry node during init', async () => {
+      registry.register(linearWorkflow());
+      const engine = new ReflexEngine(registry, makeAgent(vi.fn()));
+
+      const enterPayloads: unknown[] = [];
+      engine.on('node:enter', (payload) => enterPayloads.push(payload));
+
+      await engine.init('linear');
+
+      expect(enterPayloads).toHaveLength(1);
+      const payload = enterPayloads[0] as {
+        node: { id: string };
+        workflow: { id: string };
+      };
+      expect(payload.node.id).toBe('A');
+      expect(payload.workflow.id).toBe('linear');
+    });
+
+    it('node:enter fires after blackboard:write when seed entries present', async () => {
+      registry.register(singleNodeWorkflow());
+      const engine = new ReflexEngine(registry, makeAgent(vi.fn()));
+
+      const events: string[] = [];
+      engine.on('blackboard:write', () => events.push('blackboard:write'));
+      engine.on('node:enter', () => events.push('node:enter'));
+
+      await engine.init('single', {
+        blackboard: [{ key: 'seed', value: 'value' }],
+      });
+
+      expect(events).toEqual(['blackboard:write', 'node:enter']);
+    });
+
+    it('first step does not double-emit node:enter for the entry node', async () => {
+      registry.register(linearWorkflow());
+      const resolveFn = vi
+        .fn()
+        .mockResolvedValueOnce({ type: 'advance', edge: 'e-ab' });
+      const engine = new ReflexEngine(registry, makeAgent(resolveFn));
+
+      const enterNodeIds: string[] = [];
+      engine.on('node:enter', (payload) => {
+        const p = payload as { node: { id: string } };
+        enterNodeIds.push(p.node.id);
+      });
+
+      await engine.init('linear');
+      await engine.step();
+
+      // Init emits node:enter for A, step advances A→B emitting node:enter for B.
+      // No double A.
+      expect(enterNodeIds).toEqual(['A', 'B']);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // step() — advance
   // -----------------------------------------------------------------------
 
@@ -368,7 +428,12 @@ describe('ReflexEngine', () => {
       await engine.init('linear');
       await engine.step();
 
-      expect(events).toEqual(['node:exit', 'edge:traverse', 'node:enter']);
+      expect(events).toEqual([
+        'node:enter',
+        'node:exit',
+        'edge:traverse',
+        'node:enter',
+      ]);
     });
 
     it('emits blackboard:write between edge:traverse and node:enter when writes present', async () => {
@@ -390,6 +455,7 @@ describe('ReflexEngine', () => {
       await engine.step();
 
       expect(events).toEqual([
+        'node:enter',
         'node:exit',
         'edge:traverse',
         'blackboard:write',

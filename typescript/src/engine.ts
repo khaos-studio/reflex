@@ -90,9 +90,6 @@ export class ReflexEngine {
     this._stack = [];
     this._skipInvocation = false;
     this._status = 'running';
-    // No node:enter emitted — init() is pure setup (DESIGN.md Section 1.4
-    // separates INIT from LOOP). Use currentNode() after init() if needed.
-
     if (options?.blackboard && options.blackboard.length > 0) {
       const seedSource: BlackboardSource = {
         workflowId,
@@ -105,6 +102,11 @@ export class ReflexEngine {
       );
       this._emit('blackboard:write', { entries: seedEntries, workflow });
     }
+
+    // Emit node:enter for the entry node so every node:exit in the first
+    // step() has a matching node:enter. Fires after blackboard seeding.
+    const entryNode = workflow.nodes[workflow.entry]!;
+    this._emit('node:enter', { node: entryNode, workflow });
 
     return this._sessionId;
   }
