@@ -345,6 +345,14 @@ func (e *Engine) Blackboard() BlackboardReader {
 	return e.buildBlackboardReader()
 }
 
+// RootBlackboard returns the current workflow's ScopedBlackboard.
+// Use this for cursor-based incremental reads (e.g., streaming
+// persistence). For scoped reads across the call stack, use
+// Blackboard() instead. Returns nil if no session is active.
+func (e *Engine) RootBlackboard() *ScopedBlackboard {
+	return e.currentBlackboard
+}
+
 // Stack returns a snapshot of the call stack.
 func (e *Engine) Stack() []StackFrame {
 	return e.stackSnapshot()
