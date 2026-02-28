@@ -49,8 +49,10 @@ func (e *Engine) On(event EventType, handler EventHandler) {
 }
 
 // Init initializes a new session for the given workflow.
+// An optional InitOptions may be provided to seed the root blackboard
+// before the first step executes.
 // Returns the session ID.
-func (e *Engine) Init(workflowID string) (string, error) {
+func (e *Engine) Init(workflowID string, opts ...InitOptions) (string, error) {
 	w, ok := e.registry.Get(workflowID)
 	if !ok {
 		return "", &EngineError{Message: fmt.Sprintf("cannot initialize: workflow '%s' is not registered", workflowID)}
@@ -63,6 +65,21 @@ func (e *Engine) Init(workflowID string) (string, error) {
 	e.stack = nil
 	e.skipInvocation = false
 	e.status = StatusRunning
+
+	// Apply seed blackboard entries if provided
+	if len(opts) > 0 && len(opts[0].Blackboard) > 0 {
+		seedSource := BlackboardSource{
+			WorkflowID: workflowID,
+			NodeID:     "__init__",
+			StackDepth: 0,
+		}
+		seedEntries := e.currentBlackboard.Append(opts[0].Blackboard, seedSource)
+		e.emit(EventBlackboardWrite, Event{
+			Type:       EventBlackboardWrite,
+			Entries:    seedEntries,
+			WorkflowID: workflowID,
+		})
+	}
 
 	return e.sessionID, nil
 }

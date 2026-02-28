@@ -133,6 +133,14 @@ type BlackboardEntry struct {
 	Timestamp int64            `json:"timestamp"`
 }
 
+// InitOptions configures optional parameters for Engine.Init().
+type InitOptions struct {
+	// Blackboard entries to seed the root workflow's blackboard before the
+	// first step executes. Analogous to passing arguments to main().
+	// Seed entries are sourced from nodeId "__init__" for traceability.
+	Blackboard []BlackboardWrite
+}
+
 // BlackboardWrite is a key-value pair to append to the blackboard.
 type BlackboardWrite struct {
 	Key   string `json:"key"`

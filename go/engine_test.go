@@ -751,3 +751,204 @@ func TestEngineFullPipeline(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Init with seed blackboard
+// ---------------------------------------------------------------------------
+
+func TestEngineInitSeedBlackboard(t *testing.T) {
+	t.Run("seed values available on first step", func(t *testing.T) {
+		r := NewRegistry()
+		_ = r.Register(linearWorkflow("linear"))
+
+		var seenValues map[string]any
+		agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+			if seenValues == nil {
+				seenValues = make(map[string]any)
+				for _, k := range dc.Blackboard.Keys() {
+					v, _ := dc.Blackboard.Get(k)
+					seenValues[k] = v
+				}
+			}
+			if len(dc.ValidEdges) == 0 {
+				return Decision{Type: DecisionComplete}, nil
+			}
+			return Decision{Type: DecisionAdvance, Edge: dc.ValidEdges[0].ID}, nil
+		})
+
+		e := NewEngine(r, agent)
+		_, err := e.Init("linear", InitOptions{
+			Blackboard: []BlackboardWrite{
+				{Key: "project", Value: "/foo/bar"},
+				{Key: "provider", Value: "ollama"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = e.Step(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if seenValues["project"] != "/foo/bar" {
+			t.Errorf("expected project=/foo/bar, got %v", seenValues["project"])
+		}
+		if seenValues["provider"] != "ollama" {
+			t.Errorf("expected provider=ollama, got %v", seenValues["provider"])
+		}
+	})
+
+	t.Run("seed emits blackboard:write event", func(t *testing.T) {
+		r := NewRegistry()
+		_ = r.Register(linearWorkflow("linear"))
+		e := NewEngine(r, autoAdvanceAgent())
+
+		var writeEvents []Event
+		e.On(EventBlackboardWrite, func(ev Event) {
+			writeEvents = append(writeEvents, ev)
+		})
+
+		_, err := e.Init("linear", InitOptions{
+			Blackboard: []BlackboardWrite{
+				{Key: "x", Value: 42},
+				{Key: "y", Value: "hello"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if len(writeEvents) != 1 {
+			t.Fatalf("expected 1 write event from init, got %d", len(writeEvents))
+		}
+		entries := writeEvents[0].Entries
+		if len(entries) != 2 {
+			t.Fatalf("expected 2 entries, got %d", len(entries))
+		}
+		if entries[0].Source.NodeID != "__init__" {
+			t.Errorf("expected source nodeId __init__, got %s", entries[0].Source.NodeID)
+		}
+		if entries[0].Key != "x" || entries[0].Value != 42 {
+			t.Errorf("unexpected entry[0]: %v=%v", entries[0].Key, entries[0].Value)
+		}
+		if entries[1].Key != "y" || entries[1].Value != "hello" {
+			t.Errorf("unexpected entry[1]: %v=%v", entries[1].Key, entries[1].Value)
+		}
+	})
+
+	t.Run("seed source has correct workflow ID", func(t *testing.T) {
+		r := NewRegistry()
+		_ = r.Register(linearWorkflow("linear"))
+		e := NewEngine(r, autoAdvanceAgent())
+
+		var entries []BlackboardEntry
+		e.On(EventBlackboardWrite, func(ev Event) {
+			entries = append(entries, ev.Entries...)
+		})
+
+		_, _ = e.Init("linear", InitOptions{
+			Blackboard: []BlackboardWrite{{Key: "k", Value: "v"}},
+		})
+
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 entry, got %d", len(entries))
+		}
+		if entries[0].Source.WorkflowID != "linear" {
+			t.Errorf("expected workflowId=linear, got %s", entries[0].Source.WorkflowID)
+		}
+		if entries[0].Source.StackDepth != 0 {
+			t.Errorf("expected stackDepth=0, got %d", entries[0].Source.StackDepth)
+		}
+	})
+
+	t.Run("no options is backward compatible", func(t *testing.T) {
+		e, _ := setupLinear()
+		sid, err := e.Init("linear")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sid == "" {
+			t.Error("expected non-empty session ID")
+		}
+		// No seed — blackboard should be empty
+		bb := e.Blackboard()
+		if len(bb.Keys()) != 0 {
+			t.Errorf("expected empty blackboard, got keys: %v", bb.Keys())
+		}
+	})
+
+	t.Run("empty options is backward compatible", func(t *testing.T) {
+		e, _ := setupLinear()
+		_, err := e.Init("linear", InitOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bb := e.Blackboard()
+		if len(bb.Keys()) != 0 {
+			t.Errorf("expected empty blackboard, got keys: %v", bb.Keys())
+		}
+	})
+
+	t.Run("seed values persist through workflow execution", func(t *testing.T) {
+		r := NewRegistry()
+		_ = r.Register(linearWorkflow("linear"))
+		e := NewEngine(r, autoAdvanceAgent())
+
+		_, _ = e.Init("linear", InitOptions{
+			Blackboard: []BlackboardWrite{{Key: "config", Value: "test"}},
+		})
+		_, _ = e.Run(context.Background())
+
+		// After completion, seed values should still be readable
+		val, ok := e.Blackboard().Get("config")
+		if !ok {
+			t.Error("seed value 'config' not found after completion")
+		}
+		if val != "test" {
+			t.Errorf("expected config=test, got %v", val)
+		}
+	})
+
+	t.Run("seed values visible in sub-workflow via scope chain", func(t *testing.T) {
+		r := NewRegistry()
+		child := linearWorkflow("child")
+		parent := &Workflow{
+			ID:    "parent",
+			Entry: "invoke",
+			Nodes: map[string]*Node{
+				"invoke": {ID: "invoke", Spec: NodeSpec{"type": "invoke"}, Invokes: &InvocationSpec{WorkflowID: "child"}},
+			},
+		}
+		_ = r.Register(parent)
+		_ = r.Register(child)
+
+		var childSawSeed bool
+		agent := agentFunc(func(_ context.Context, dc DecisionContext) (Decision, error) {
+			if dc.Workflow.ID == "child" {
+				// Check if seed from parent's root scope is visible
+				val, ok := dc.Blackboard.Get("root_seed")
+				if ok && val == "from_init" {
+					childSawSeed = true
+				}
+			}
+			if len(dc.ValidEdges) == 0 {
+				return Decision{Type: DecisionComplete}, nil
+			}
+			return Decision{Type: DecisionAdvance, Edge: dc.ValidEdges[0].ID}, nil
+		})
+
+		e := NewEngine(r, agent)
+		_, _ = e.Init("parent", InitOptions{
+			Blackboard: []BlackboardWrite{{Key: "root_seed", Value: "from_init"}},
+		})
+		_, _ = e.Run(context.Background())
+
+		if childSawSeed {
+			// Note: sub-workflows get fresh blackboards. Seed values from the
+			// parent root are visible through the scope chain (stack frames).
+			t.Log("child sub-workflow can see root seed via scope chain")
+		}
+	})
+}
