@@ -13,6 +13,7 @@ import {
   BlackboardEntry,
   BlackboardReader,
   BlackboardSource,
+  BlackboardWrite,
   StackFrame,
   DecisionAgent,
   DecisionContext,
@@ -22,6 +23,7 @@ import {
   EngineEvent,
   EventHandler,
   EngineStatus,
+  InitOptions,
 } from './types.js';
 import { WorkflowRegistry } from './registry.js';
 import { ScopedBlackboard, ScopedBlackboardReader } from './blackboard.js';
@@ -73,7 +75,7 @@ export class ReflexEngine {
   // Lifecycle
   // -------------------------------------------------------------------------
 
-  async init(workflowId: string): Promise<string> {
+  async init(workflowId: string, options?: InitOptions): Promise<string> {
     const workflow = this._registry.get(workflowId);
     if (!workflow) {
       throw new EngineError(
@@ -90,6 +92,19 @@ export class ReflexEngine {
     this._status = 'running';
     // No node:enter emitted — init() is pure setup (DESIGN.md Section 1.4
     // separates INIT from LOOP). Use currentNode() after init() if needed.
+
+    if (options?.blackboard && options.blackboard.length > 0) {
+      const seedSource: BlackboardSource = {
+        workflowId,
+        nodeId: '__init__',
+        stackDepth: 0,
+      };
+      const seedEntries = this._currentBlackboard.append(
+        options.blackboard,
+        seedSource,
+      );
+      this._emit('blackboard:write', { entries: seedEntries, workflow });
+    }
 
     return this._sessionId;
   }

@@ -215,6 +215,97 @@ describe('ReflexEngine', () => {
   });
 
   // -----------------------------------------------------------------------
+  // init() — seed blackboard
+  // -----------------------------------------------------------------------
+
+  describe('init() with seed blackboard', () => {
+    it('seed entries are present on blackboard after init', async () => {
+      registry.register(singleNodeWorkflow());
+      const engine = new ReflexEngine(registry, makeAgent(vi.fn()));
+
+      await engine.init('single', {
+        blackboard: [
+          { key: 'userId', value: 'abc-123' },
+          { key: 'mode', value: 'fast' },
+        ],
+      });
+
+      expect(engine.blackboard().get('userId')).toBe('abc-123');
+      expect(engine.blackboard().get('mode')).toBe('fast');
+    });
+
+    it('seed entries have nodeId "__init__" source', async () => {
+      registry.register(singleNodeWorkflow());
+      const engine = new ReflexEngine(registry, makeAgent(vi.fn()));
+
+      await engine.init('single', {
+        blackboard: [{ key: 'foo', value: 'bar' }],
+      });
+
+      const entry = engine.blackboard().entries()[0];
+      expect(entry.source.nodeId).toBe('__init__');
+      expect(entry.source.workflowId).toBe('single');
+      expect(entry.source.stackDepth).toBe(0);
+    });
+
+    it('emits blackboard:write for seed entries during init', async () => {
+      registry.register(singleNodeWorkflow());
+      const engine = new ReflexEngine(registry, makeAgent(vi.fn()));
+
+      const writePayloads: unknown[] = [];
+      engine.on('blackboard:write', (payload) => writePayloads.push(payload));
+
+      await engine.init('single', {
+        blackboard: [{ key: 'seed', value: 'value' }],
+      });
+
+      expect(writePayloads).toHaveLength(1);
+      const payload = writePayloads[0] as {
+        entries: { key: string }[];
+        workflow: { id: string };
+      };
+      expect(payload.entries[0].key).toBe('seed');
+      expect(payload.workflow.id).toBe('single');
+    });
+
+    it('seed entries are visible to guard evaluation on first step', async () => {
+      // fanOutWorkflow: CHOOSE → B (guard: exists 'flag'), CHOOSE → C (no guard)
+      // Without seeding, e-flag is invalid. With seeding 'flag', both edges valid.
+      registry.register(fanOutWorkflow());
+      const resolveFn = vi
+        .fn()
+        .mockResolvedValueOnce({ type: 'advance', edge: 'e-flag' });
+      const engine = new ReflexEngine(registry, makeAgent(resolveFn));
+
+      await engine.init('fanout', {
+        blackboard: [{ key: 'flag', value: true }],
+      });
+
+      const result = await engine.step();
+      expect(result.status).toBe('advanced');
+      if (result.status === 'advanced') {
+        expect(result.node.id).toBe('B');
+      }
+    });
+
+    it('init() without options leaves blackboard empty (backward compatible)', async () => {
+      registry.register(singleNodeWorkflow());
+      const engine = new ReflexEngine(registry, makeAgent(vi.fn()));
+
+      await engine.init('single');
+      expect(engine.blackboard().entries()).toHaveLength(0);
+    });
+
+    it('init() with empty blackboard array leaves blackboard empty', async () => {
+      registry.register(singleNodeWorkflow());
+      const engine = new ReflexEngine(registry, makeAgent(vi.fn()));
+
+      await engine.init('single', { blackboard: [] });
+      expect(engine.blackboard().entries()).toHaveLength(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // step() — advance
   // -----------------------------------------------------------------------
 
