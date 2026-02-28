@@ -148,7 +148,7 @@ See [DESIGN.md](../docs/DESIGN.md) for complete type definitions and semantics.
 
 ## Status
 
-**v-alpha** — Implementation complete. All 6 milestones shipped: types & DAG validation, blackboard, guards, execution engine, integration tests, packaging. 231 tests passing. ESM + CJS dual output.
+**v0.2.0** — 237 tests passing. ESM + CJS dual output.
 
 ## Documentation
 
@@ -160,5 +160,7 @@ See [DESIGN.md](../docs/DESIGN.md) for complete type definitions and semantics.
 MIT — see [LICENSE](../LICENSE)
 
 ## Changelog
+
+**v0.2.0** — Seed blackboard support: `init(workflowId, { blackboard: [...] })` pre-seeds the root blackboard before the first step. `InitOptions` type exported. 237 tests.
 
 **v0.1.0** — Initial release. DAG validation, scoped append-only blackboard, built-in + custom guards, execution engine with call stack composition, event system, suspend/resume. 231 tests.
