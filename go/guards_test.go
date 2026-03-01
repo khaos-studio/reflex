@@ -1,6 +1,7 @@
 package reflex
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -97,6 +98,75 @@ func TestGuardNotEquals(t *testing.T) {
 		ok, err := g.Evaluate(readerWith())
 		if err != nil || !ok {
 			t.Errorf("expected true (key absent), got %v", ok)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// BuiltinGuard — numeric-aware equality
+// ---------------------------------------------------------------------------
+
+func TestGuardEqualsNumericAware(t *testing.T) {
+	t.Run("int vs float64", func(t *testing.T) {
+		// Blackboard has int(5), guard expects float64(5.0)
+		g := &BuiltinGuard{Type: GuardEquals, Key: "count", Value: float64(5.0)}
+		ok, err := g.Evaluate(readerWith(bbEntry("count", int(5))))
+		if err != nil || !ok {
+			t.Errorf("expected int(5) == float64(5.0), got %v err=%v", ok, err)
+		}
+	})
+	t.Run("float64 vs int", func(t *testing.T) {
+		// Blackboard has float64(5.0), guard expects int(5)
+		g := &BuiltinGuard{Type: GuardEquals, Key: "count", Value: int(5)}
+		ok, err := g.Evaluate(readerWith(bbEntry("count", float64(5.0))))
+		if err != nil || !ok {
+			t.Errorf("expected float64(5.0) == int(5), got %v err=%v", ok, err)
+		}
+	})
+	t.Run("json.Number vs int", func(t *testing.T) {
+		g := &BuiltinGuard{Type: GuardEquals, Key: "count", Value: int(5)}
+		ok, err := g.Evaluate(readerWith(bbEntry("count", json.Number("5"))))
+		if err != nil || !ok {
+			t.Errorf("expected json.Number(5) == int(5), got %v err=%v", ok, err)
+		}
+	})
+	t.Run("string vs string unchanged", func(t *testing.T) {
+		g := &BuiltinGuard{Type: GuardEquals, Key: "name", Value: "alice"}
+		ok, err := g.Evaluate(readerWith(bbEntry("name", "alice")))
+		if err != nil || !ok {
+			t.Errorf("expected string equality, got %v", ok)
+		}
+	})
+	t.Run("map vs map unchanged", func(t *testing.T) {
+		m := map[string]any{"a": 1}
+		g := &BuiltinGuard{Type: GuardEquals, Key: "data", Value: m}
+		ok, err := g.Evaluate(readerWith(bbEntry("data", map[string]any{"a": 1})))
+		if err != nil || !ok {
+			t.Errorf("expected map equality, got %v", ok)
+		}
+	})
+	t.Run("int vs string falls back to DeepEqual", func(t *testing.T) {
+		g := &BuiltinGuard{Type: GuardEquals, Key: "val", Value: "5"}
+		ok, err := g.Evaluate(readerWith(bbEntry("val", int(5))))
+		if err != nil || ok {
+			t.Errorf("expected int(5) != string(5), got %v", ok)
+		}
+	})
+}
+
+func TestGuardNotEqualsNumericAware(t *testing.T) {
+	t.Run("int vs different float64", func(t *testing.T) {
+		g := &BuiltinGuard{Type: GuardNotEquals, Key: "count", Value: float64(6.0)}
+		ok, err := g.Evaluate(readerWith(bbEntry("count", int(5))))
+		if err != nil || !ok {
+			t.Errorf("expected int(5) != float64(6.0), got %v", ok)
+		}
+	})
+	t.Run("int vs same float64", func(t *testing.T) {
+		g := &BuiltinGuard{Type: GuardNotEquals, Key: "count", Value: float64(5.0)}
+		ok, err := g.Evaluate(readerWith(bbEntry("count", int(5))))
+		if err != nil || ok {
+			t.Errorf("expected int(5) not-not-equal float64(5.0), got %v", ok)
 		}
 	})
 }
