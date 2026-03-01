@@ -148,7 +148,7 @@ See [DESIGN.md](../docs/DESIGN.md) for complete type definitions and semantics.
 
 ## Status
 
-**v0.2.1** — 240 tests passing. ESM + CJS dual output.
+**v0.3.0** — 284 tests passing. ESM + CJS dual output.
 
 ## Documentation
 
@@ -160,6 +160,8 @@ See [DESIGN.md](../docs/DESIGN.md) for complete type definitions and semantics.
 MIT — see [LICENSE](../LICENSE)
 
 ## Changelog
+
+**v0.3.0** — Declarative workflows: JSON schema definition, `loadWorkflow()` for loading workflows from JSON, `serializeWorkflow()` for round-trip serialization. Custom guard registry, cross-implementation fixture validation. 284 tests.
 
 **v0.2.1** — Entry node event fix: `init()` now emits `node:enter` for the entry node, ensuring every visited node has a matching enter/exit pair. 240 tests.
 
