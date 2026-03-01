@@ -141,6 +141,18 @@ func (bb *ScopedBlackboard) Append(writes []BlackboardWrite, source BlackboardSo
 	return newEntries
 }
 
+// CursorReader provides read-only access to a blackboard's incremental
+// entry log. Use Cursor() to snapshot the current position, then
+// EntriesFrom() after subsequent steps to retrieve only new entries.
+// This is the public interface returned by Engine.CurrentBlackboard().
+type CursorReader interface {
+	// Cursor returns the current end position of the entry log.
+	Cursor() Cursor
+	// EntriesFrom returns entries appended at or after position c,
+	// plus the cursor for the new end position.
+	EntriesFrom(c Cursor) ([]BlackboardEntry, Cursor)
+}
+
 // Cursor represents a position in the blackboard entry log.
 // Use with EntriesFrom to read only entries appended after this position.
 // Cursor values are only valid for the ScopedBlackboard that produced them.

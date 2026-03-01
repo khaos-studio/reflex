@@ -1030,36 +1030,36 @@ func TestEngineInitSeedBlackboard(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RootBlackboard — cursor access
+// CurrentBlackboard — cursor access
 // ---------------------------------------------------------------------------
 
-func TestRootBlackboardBeforeInit(t *testing.T) {
+func TestCurrentBlackboardBeforeInit(t *testing.T) {
 	reg := CreateRegistry()
 	e := CreateEngine(reg, autoAdvanceAgent())
-	if bb := e.RootBlackboard(); bb != nil {
-		t.Error("expected nil RootBlackboard before Init")
+	if bb := e.CurrentBlackboard(); bb != nil {
+		t.Error("expected nil CurrentBlackboard before Init")
 	}
 }
 
-func TestRootBlackboardAfterInit(t *testing.T) {
+func TestCurrentBlackboardAfterInit(t *testing.T) {
 	e, _ := setupLinear()
 	_, _ = e.Init("linear")
-	bb := e.RootBlackboard()
+	bb := e.CurrentBlackboard()
 	if bb == nil {
-		t.Fatal("expected non-nil RootBlackboard after Init")
+		t.Fatal("expected non-nil CurrentBlackboard after Init")
 	}
 }
 
-func TestRootBlackboardCursorTracksWrites(t *testing.T) {
+func TestCurrentBlackboardCursorTracksWrites(t *testing.T) {
 	e, _ := setupLinear()
 	_, _ = e.Init("linear", InitOptions{
 		Blackboard: []BlackboardWrite{
 			{Key: "seed", Value: "hello"},
 		},
 	})
-	bb := e.RootBlackboard()
+	bb := e.CurrentBlackboard()
 	if bb == nil {
-		t.Fatal("expected non-nil RootBlackboard")
+		t.Fatal("expected non-nil CurrentBlackboard")
 	}
 	cur := bb.Cursor()
 	if cur == 0 {
@@ -1077,7 +1077,7 @@ func TestRootBlackboardCursorTracksWrites(t *testing.T) {
 	}
 }
 
-func TestRootBlackboardDuringSubWorkflow(t *testing.T) {
+func TestCurrentBlackboardDuringSubWorkflow(t *testing.T) {
 	reg := NewRegistry()
 
 	child := linearWorkflow("child")
@@ -1111,10 +1111,10 @@ func TestRootBlackboardDuringSubWorkflow(t *testing.T) {
 		t.Fatalf("step error: %v", err)
 	}
 	if result.Status == StepInvoked {
-		// We're now in the child — RootBlackboard should be the child's
-		bb := e.RootBlackboard()
+		// We're now in the child — CurrentBlackboard should be the child's
+		bb := e.CurrentBlackboard()
 		if bb == nil {
-			t.Fatal("expected non-nil RootBlackboard during sub-workflow")
+			t.Fatal("expected non-nil CurrentBlackboard during sub-workflow")
 		}
 		// Child's local blackboard should be fresh (no parent writes directly)
 		if bb.Cursor() != 0 {

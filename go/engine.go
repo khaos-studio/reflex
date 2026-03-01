@@ -360,11 +360,17 @@ func (e *Engine) Blackboard() BlackboardReader {
 	return e.buildBlackboardReader()
 }
 
-// RootBlackboard returns the current workflow's ScopedBlackboard.
+// CurrentBlackboard returns a read-only cursor interface for the active
+// workflow's blackboard. During sub-workflow execution, this returns the
+// child workflow's blackboard (not the parent's).
+//
 // Use this for cursor-based incremental reads (e.g., streaming
-// persistence). For scoped reads across the call stack, use
+// persistence). For scoped reads across the full call stack, use
 // Blackboard() instead. Returns nil if no session is active.
-func (e *Engine) RootBlackboard() *ScopedBlackboard {
+func (e *Engine) CurrentBlackboard() CursorReader {
+	if e.currentBlackboard == nil {
+		return nil
+	}
 	return e.currentBlackboard
 }
 
