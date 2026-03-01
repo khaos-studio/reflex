@@ -17,6 +17,19 @@ reflex/
 └── LICENSE
 ```
 
+## Versioning & Tags
+
+TypeScript and Go are versioned independently. Tags use the format `{language}/v{major}.{minor}.{patch}`:
+
+- TypeScript: `typescript/v0.5.0`
+- Go: `go/v0.2.1`
+
+Always use annotated tags with the milestone name as the message:
+
+```bash
+git tag -a typescript/v0.5.0 -m "M9: Persistence (TypeScript)"
+```
+
 ## Escapement Settings
 - **context-path**: ../reflex-ctx
 
